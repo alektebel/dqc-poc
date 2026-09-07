@@ -1,0 +1,106 @@
+# DQC PoC — local stack (Linux / macOS / Windows via Docker Desktop).
+#
+#   docker compose up --build                      start API + DQC Studio
+#   docker compose --profile ollama up --build     start everything incl. Ollama + model pull
+#   docker compose down                            stop and remove containers
+#   docker compose down -v                         also drop the cached Ollama models (~9 GB)
+#
+# Open http://localhost:4200 for the DQC Studio UI.
+#
+# Configuration via .env (see .env.example):
+#   OLLAMA_MODEL   model tag pulled when using the ollama profile (default: qwen3:4b)
+#   API_PORT       host port for the FastAPI service  (default: 8000)
+#   DQC_PORT       host port for the DQC Studio UI     (default: 4200)
+#   OLLAMA_PORT    host port for the Ollama server     (default: 11434)
+#   REGLLM_LLM    LLM backend: auto | ollama | bedrock | stub
+
+name: dqc-poc
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: dqc-poc-ollama
+    profiles: [ollama]
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: dqc-poc-ollama-init
+    profiles: [ollama]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+      MODEL_TAG: "${OLLAMA_MODEL:-qwen3:4b}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if ollama list 2>/dev/null | tail -n +2 | awk '{print $$1}' | grep -qx "$$MODEL_TAG"; then
+          echo "[init] $$MODEL_TAG already present in Ollama cache"
+        else
+          echo "[init] pulling $$MODEL_TAG (this can take a while on first run)…"
+          ollama pull "$$MODEL_TAG"
+          echo "[init] $$MODEL_TAG ready"
+        fi
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dqc-poc-api:latest
+    container_name: dqc-poc-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      LOG_LEVEL: INFO
+      CORS_ORIGINS: "*"
+      REGLLM_ROUTERS: dqc
+      REGLLM_LLM: "${REGLLM_LLM:-auto}"
+      OLLAMA_URL: "http://ollama:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen3:4b}"
+      BEDROCK_MODEL_ID: "${BEDROCK_MODEL_ID:-eu.amazon.nova-micro-v1:0}"
+      BEDROCK_REGION: "${BEDROCK_REGION:-eu-west-1}"
+      REGLLM_LLM_TIMEOUT: "300"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=2).status==200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  studio:
+    build:
+      context: ./DQC/studio
+    image: dqc-poc-studio:latest
+    container_name: dqc-poc-studio
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${DQC_PORT:-4200}:80"
+    environment:
+      API_UPSTREAM: "dqc-poc-api:8000"
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
