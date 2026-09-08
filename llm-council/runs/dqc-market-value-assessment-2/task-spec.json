@@ -1,0 +1,36 @@
+{
+  "run_id": "dqc-market-value-assessment",
+  "task": "Produce a market & pricing assessment for the 'RegLLM / DQC PoC' — an LLM-powered generator of regulation-grounded data-quality checks (SQL) for regulatory credit/risk reporting pipelines (EBA GL/2017/16 PD&LGD, BCBS 239 / ECB RDARR, Banco de Espana Anejo IX / Circular 4/2017). The assessment must (a) map pricing vs a full competitor landscape, (b) recommend a defensible price point + packaging for the SPAIN-ONLY niche (not global), (c) propose concrete differentiation vs Collibra, Soda.ai and every other named competitor, and (d) supply the value/ROI justification narrative. Primary go-to-market model to price against is a CONSULTANCY WHITE-LABEL ACCELERATOR (the generator+harness is licensed through / used by consultancies, which then sell the certified audit pack to banks), while also pricing a direct-to-significant-institution (SI) tier.",
+  "constraints": [
+    "Target market = Spanish/ES niche only: ~10-15 Spanish Significant Institutions (Santander, BBVA, CaixaBank, Sabadell, Bankinter, Unicaja, Abanca, Kutxabank, Ibercaja, Cajamar), ~73 Less Significant Institutions under Banco de Espana, plus 3-5 consultancies as the channel. Do NOT size a global market.",
+    "Delivery model to price against = consultancy white-label accelerator (primary) + a direct SI subscription (secondary).",
+    "Competitor scan must cover the FULL landscape: Collibra (base ~$170K, DQ module ~$156K budgeted separately; governance suites $170K-$295K before services; full stack $200K-$500K/yr), Soda.ai (Soda Core is free OSS; Soda Cloud is the paid tier), Monte Carlo, Anomalo, Bigeye, Validio (managed observability, $50K-$200K+/yr), Ataccama ONE (~$90K+), Informatica, Stratio / Datio (local Spain), and OSS (Great Expectations, dbt tests + dbt-expectations, Soda Core, Elementary, Deequ — free + engineering time). Also factor the consultancy incumbents (Management Solutions Madrid, NTT Data, Minsait/Indra, Accenture, Big 4) who hand-write rule batteries at roughly EUR200K-EUR500K recurring per 3-4 person engagement.",
+    "Recommend a concrete price point + packaging: state both a number/range AND the packaging (per-regulation corpus module / per-SI annual license / per-engagement or per-audit-pack for consultancies / partner price band), with the arithmetic showing how each segment is priced and why it is defensible against Collibra and Soda.",
+    "Differentiation must be specific and actionable: the defensible moat is (i) regulation-grounded rule generation plus machine-verifiable field x article coverage (proof-by-execution, not asserted), (ii) the deterministic mutation-testing harness with NO LLM judge (recall=1.0 gate), (iii) Spanish-language corpus/citations and bilingual ES/EN output, (iv) SAS AST parsing + field-diff explainer (SAS lineage is the artefact Spanish risk teams live in; no observability vendor parses it), (v) on-prem / local-LLM (GGUF/Ollama) deployment so schema never leaves the bank (data-egress compliance selling point vs US SaaS), and (vi) regenerable coverage on every circular amendment (Circular 1/2025) — the delta becomes the engagement. For each competitor, state clearly 'where we win' and 'where they still beat us'. Do not invent capabilities the repo does not have (no scheduler, no incident-triage agent yet, single regulation so far).",
+    "Output is a MARKET/PRICING ASSESSMENT REPORT. Map the engineering plan-template sections to this purpose as follows: 'Overview' = executive summary + headline recommendation; 'Scope' = in/out of the assessment; 'Phases' = the workstreams/recommendations (competitor price mapping, packaging model, segment pricing math, differentiation, go-to-market motion, launch steps) ordered by priority; 'Testing Strategy' = how to validate the pricing hypothesis (design-partner pilot, discovery calls, competitor price checks, pilot acceptance criteria); 'Risks' = market/pricing risks incl. >=2 self-critique bullets naming concrete weak points; 'Rollback Plan' = what to do if the price/channel does not land (price ladder, pivot to direct SI, reposition vs OSS); 'Edge Cases' = segment edge cases (LSIs via consultancy, banks with hard data-egress rules, banks already on Collibra/Informatica, tourism/savings co-ops); 'Open Questions' = market questions still unverified.",
+    "Do NOT invent prices or competitor facts. The embedded figures above come from the repo research memos; where you are not sure, mark it as an assumption and flag it for the analyst to verify.",
+    "Do NOT spend effort on implementation/engineering details beyond what is needed to support the pricing and differentiation claims (e.g. only mention that the harness is built, not how to refactor it)."
+  ],
+  "repo_context": {
+    "root": ".",
+    "paths": [
+      "README.md",
+      "docs/DATA_QUALITY_INDUSTRY_SOTA_2026.md",
+      "docs/DATA_QUALITY_SPAIN_NICHE.md",
+      "docs/MVP_ROADMAP.md",
+      "docs/EVALUATION.md",
+      "DQC/eval/README.md",
+      "config.yaml"
+    ],
+    "notes": "Read these to ground the assessment. DATA_QUALITY_INDUSTRY_SOTA_2026.md has the three-tier tool landscape, budgets/staffing, LLM-based DQ SOTA and the regulatory bar. DATA_QUALITY_SPAIN_NICHE.md has the Spain market structure, the SI/LSI counts, the Spanish regulatory stack (RDARR/SREP, GL/2017/16, Circular 4/2017 + Anejo IX, COREP/FINREP, CIRBE/AnaCredit), the consultancy incumbents, who buys today, and the local go-to-market implications (language, local-LLM data-egress). MVP_ROADMAP.md shows the product trajectory (BIRD concept model, dialect compilers, more corpora, on-prem packaging). You may also skim DQC/eval/, src/knowledge/ and api/ to confirm the capabilities you reference (harness, coverage matrix, RAG, SAS parser) are real and to avoid over-claiming."
+  },
+  "agents": {
+    "planners": [
+      { "name": "codex", "kind": "codex", "model": "gpt-6-astra", "reasoning_effort": "medium" },
+      { "name": "opencode-deepseek", "kind": "opencode", "model": "nan/deepseek-v4-flash", "cli_format": "json" },
+      { "name": "opencode-glm", "kind": "opencode", "model": "nan/glm5.3-flash", "cli_format": "json" },
+      { "name": "opencode-qwen", "kind": "opencode", "model": "nan/qwen3.6", "cli_format": "json" }
+    ],
+    "judge": { "name": "codex-judge", "kind": "codex", "model": "gpt-6-astra", "reasoning_effort": "medium" }
+  }
+}
