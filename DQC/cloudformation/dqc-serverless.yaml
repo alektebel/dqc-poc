@@ -1,0 +1,380 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DQC PoC — Serverless layer (Lambda functions, API Gateway).
+  Issue #7: Lambda to find implicated fields (LangChain + Bedrock).
+  Issue #9: Lambda to generate SQL with retry loop + LLM-as-judge.
+  Issue #2: Lambda to classify DQCs by BCBS 239 dimensions.
+  Issues #4, #5: API Gateway for Bedrock integration.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: dqc-poc
+  AWSRegion:
+    Type: String
+    Default: eu-west-1
+  BedrockModelId:
+    Type: String
+    Default: eu.amazon.nova-micro-v1:0
+  JudgeBedrockModelId:
+    Type: String
+    Default: eu.amazon.nova-pro-v1:0
+
+Resources:
+  # ── IAM: Lambda execution role (references S3 + DynamoDB from infrastructure) ──
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-lambda-exec"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+      Policies:
+        - PolicyName: LambdaDQCPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query, dynamodb:Scan]
+                Resource: !ImportValue !Sub "${ProjectName}-DqcStoreTableArn"
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !ImportValue !Sub "${ProjectName}-S3BucketArn"
+                  - !Sub [ "arn:aws:s3:::${BucketName}/*", BucketName: !ImportValue !Sub "${ProjectName}-S3BucketName" ]
+      Tags: [{ Key: Project, Value: !Ref ProjectName }]
+
+  # ── Lambda Layer: LangChain + Bedrock ──
+  FindFieldsLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub "${ProjectName}-langchain-layer"
+      Description: LangChain + Bedrock Python layer for DQC Lambda functions
+      CompatibleRuntimes: [python3.12]
+      ContentUri: ../lambda-layers/langchain-layer/
+      LicenseInfo: MIT
+
+  # ── Lambda #7: Find Implicated Fields ──
+  FindFieldsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-find-fields"
+      Runtime: python3.12
+      Handler: handler.handler
+      MemorySize: 1024
+      Timeout: 900
+      Layers:
+        - !Ref FindFieldsLayer
+      Environment:
+        Variables:
+          BEDROCK_REGION: !Ref AWSRegion
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          S3_BUCKET: !ImportValue !Sub "${ProjectName}-S3BucketName"
+          PROMPTS_PREFIX: prompts
+          DYNAMODB_TABLE: !ImportValue !Sub "${ProjectName}-DqcStoreTableName"
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Tags: [{ Key: Project, Value: !Ref ProjectName }]
+
+  FindFieldsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FindFieldsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWSRegion}:${AWS::AccountId}:*"
+
+  # ── Lambda #9: SQL Generator (with retry loop + LLM-as-judge) ──
+  SqlGeneratorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-sql-generator"
+      Runtime: python3.12
+      Handler: handler.handler
+      MemorySize: 2048
+      Timeout: 900
+      Layers:
+        - !Ref FindFieldsLayer
+      Environment:
+        Variables:
+          BEDROCK_REGION: !Ref AWSRegion
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          JUDGE_MODEL_ID: !Ref JudgeBedrockModelId
+          S3_BUCKET: !ImportValue !Sub "${ProjectName}-S3BucketName"
+          PROMPTS_PREFIX: prompts
+          DYNAMODB_TABLE: !ImportValue !Sub "${ProjectName}-DqcStoreTableName"
+          MAX_RETRIES: "5"
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Tags: [{ Key: Project, Value: !Ref ProjectName }]
+
+  SqlGeneratorPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SqlGeneratorFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWSRegion}:${AWS::AccountId}:*"
+
+  # ── Lambda #2: BCBS 239 Classifier ──
+  BcbsClassifierFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-bcbs-classifier"
+      Runtime: python3.12
+      Handler: handler.handler
+      MemorySize: 512
+      Timeout: 300
+      Layers:
+        - !Ref FindFieldsLayer
+      Environment:
+        Variables:
+          BEDROCK_REGION: !Ref AWSRegion
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          DYNAMODB_TABLE: !ImportValue !Sub "${ProjectName}-DqcStoreTableName"
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Tags: [{ Key: Project, Value: !Ref ProjectName }]
+
+  BcbsClassifierPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BcbsClassifierFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWSRegion}:${AWS::AccountId}:*"
+
+  # ── DynamoDB Stream → BCBS Classifier ──
+  DqcStream:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !ImportValue !Sub "${ProjectName}-DqcStoreTableArn"
+      FunctionName: !Ref BcbsClassifierFunction
+      StartingPosition: LATEST
+      BatchSize: 1
+
+  # ── API Gateway: DQC API (Issues #4, #5) ──
+  DqcApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${ProjectName}-dqc-api"
+      Description: DQC PoC API — Bedrock integration for Nova Micro. Endpoints: /fields, /generate, /judge, /bcbs, /health, /checks, /dashboard
+
+  # --- /health ---
+  DqcApiRoot:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref DqcApi
+      ParentId: !GetAtt DqcApi.RootResourceId
+      PathPart: health
+
+  DqcApiHealthMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DqcApi
+      ResourceId: !Ref DqcApiRoot
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: '{"status": "healthy", "service": "dqc-poc", "version": "1.0.0"}'
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+
+  # --- /fields (Issue #7) ---
+  DqcApiFieldsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref DqcApi
+      ParentId: !GetAtt DqcApi.RootResourceId
+      PathPart: fields
+
+  DqcApiFieldsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DqcApi
+      ResourceId: !Ref DqcApiFieldsResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:paths-and-querystring-parameters:${FindFieldsFunction.Arn}"
+
+  # --- /generate (Issue #9) ---
+  DqcApiGenerateResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref DqcApi
+      ParentId: !GetAtt DqcApi.RootResourceId
+      PathPart: generate
+
+  DqcApiGenerateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DqcApi
+      ResourceId: !Ref DqcApiGenerateResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:paths-and-querystring-parameters:${SqlGeneratorFunction.Arn}"
+
+  # --- /judge ---
+  DqcApiJudgeResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref DqcApi
+      ParentId: !GetAtt DqcApi.RootResourceId
+      PathPart: judge
+
+  DqcApiJudgeMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DqcApi
+      ResourceId: !Ref DqcApiJudgeResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:paths-and-querystring-parameters:${SqlGeneratorFunction.Arn}"
+
+  # --- /bcbs (Issue #2) ---
+  DqcApiBcbsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref DqcApi
+      ParentId: !GetAtt DqcApi.RootResourceId
+      PathPart: bcbs
+
+  DqcApiBcbsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DqcApi
+      ResourceId: !Ref DqcApiBcbsResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:paths-and-querystring-parameters:${BcbsClassifierFunction.Arn}"
+
+  # --- /checks ---
+  DqcApiChecksResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref DqcApi
+      ParentId: !GetAtt DqcApi.RootResourceId
+      PathPart: checks
+
+  DqcApiChecksMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DqcApi
+      ResourceId: !Ref DqcApiChecksResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: '{"checks": [], "message": "ECS service not connected"}'
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+
+  # --- /dashboard ---
+  DqcApiDashboardResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref DqcApi
+      ParentId: !GetAtt DqcApi.RootResourceId
+      PathPart: dashboard
+
+  DqcApiDashboardMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref DqcApi
+      ResourceId: !Ref DqcApiDashboardResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: '{"dashboard": {}, "message": "ECS service not connected"}'
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+
+  # ── Deployment ──
+  DqcApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - DqcApiHealthMethod
+      - DqcApiFieldsMethod
+      - DqcApiGenerateMethod
+      - DqcApiJudgeMethod
+      - DqcApiBcbsMethod
+      - DqcApiChecksMethod
+      - DqcApiDashboardMethod
+    Properties:
+      RestApiId: !Ref DqcApi
+      StageName: prod
+
+Outputs:
+  FindFieldsLambdaArn:
+    Value: !GetAtt FindFieldsFunction.Arn
+    Export: { Name: !Sub "${ProjectName}-FindFieldsLambdaArn" }
+
+  FindFieldsLambdaName:
+    Value: !Ref FindFieldsFunction
+    Export: { Name: !Sub "${ProjectName}-FindFieldsLambdaName" }
+
+  SqlGeneratorLambdaArn:
+    Value: !GetAtt SqlGeneratorFunction.Arn
+    Export: { Name: !Sub "${ProjectName}-SqlGeneratorLambdaArn" }
+
+  SqlGeneratorLambdaName:
+    Value: !Ref SqlGeneratorFunction
+    Export: { Name: !Sub "${ProjectName}-SqlGeneratorLambdaName" }
+
+  BcbsClassifierLambdaArn:
+    Value: !GetAtt BcbsClassifierFunction.Arn
+    Export: { Name: !Sub "${ProjectName}-BcbsClassifierLambdaArn" }
+
+  BcbsClassifierLambdaName:
+    Value: !Ref BcbsClassifierFunction
+    Export: { Name: !Sub "${ProjectName}-BcbsClassifierLambdaName" }
+
+  DqcApiUrl:
+    Value: !Sub "https://${DqcApi}.execute-api.${AWSRegion}.amazonaws.com/prod"
+    Export: { Name: !Sub "${ProjectName}-DqcApiUrl" }
+
+  DqcApiFieldsEndpoint:
+    Value: !Sub "https://${DqcApi}.execute-api.${AWSRegion}.amazonaws.com/prod/fields"
+    Export: { Name: !Sub "${ProjectName}-DqcApiFieldsEndpoint" }
+
+  DqcApiGenerateEndpoint:
+    Value: !Sub "https://${DqcApi}.execute-api.${AWSRegion}.amazonaws.com/prod/generate"
+    Export: { Name: !Sub "${ProjectName}-DqcApiGenerateEndpoint" }
+
+  DqcApiBcbsEndpoint:
+    Value: !Sub "https://${DqcApi}.execute-api.${AWSRegion}.amazonaws.com/prod/bcbs"
+    Export: { Name: !Sub "${ProjectName}-DqcApiBcbsEndpoint" }
+
+  LangChainLayerArn:
+    Value: !Ref FindFieldsLayer
+    Export: { Name: !Sub "${ProjectName}-LangChainLayerArn" }

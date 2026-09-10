@@ -1,0 +1,11 @@
+# Sample DQC Rules for Testing
+# Each line is a natural-language rule that should be converted to a SQL check.
+
+Genera un DQC que verifique que PD_ESTIMADA no sea negativa.
+Genera un DQC que verifique que MATURIDAD sea posterior a la FECHA_CONTRATACION.
+Genera un DQC que compare PD_ESTIMADA con PD_REAL y marque como inconsistente si la diferencia es mayor al 10%.
+Genera un DQC que verifique que el CLIENTE no sea NULL para exposiciones activas.
+Genera un DQC que verifique que la suma de EXPOSICION por cliente no supere el LÍMITE_CONCEDIDO.
+Genera un DQC que verifique que el SECTOR ECONOMICO sea uno de los valores válidos del diccionario.
+Genera un DQC que verifique que la categoría de riesgo sea consistente entre la tabla de exposiciones y la tabla de garantías.
+Genera un DQC que verifique que no existan duplicados de la combinación (CLIENTE_ID, PRODUCTO_ID, FECHA).

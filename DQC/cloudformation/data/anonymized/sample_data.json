@@ -1,0 +1,62 @@
+[
+  {
+    "client_id": "CLI_001",
+    "client_name": "Cliente Demo 1",
+    "product_id": "PROD_A",
+    "pd_estimate": 0.05,
+    "pd_real": 0.06,
+    "maturity": "2027-06-15",
+    "fecha_contratacion": "2024-01-10",
+    "exposicion": 150000,
+    "limite_concedido": 200000,
+    "sector_economico": "Tecnología",
+    "risk_category": "BBB",
+    "status": "ACTIVE",
+    "guarantee_value": 100000
+  },
+  {
+    "client_id": "CLI_002",
+    "client_name": "Cliente Demo 2",
+    "product_id": "PROD_B",
+    "pd_estimate": -0.02,
+    "pd_real": 0.03,
+    "maturity": "2026-12-31",
+    "fecha_contratacion": "2023-06-20",
+    "exposicion": 500000,
+    "limite_concedido": 400000,
+    "sector_economico": "Manufactura",
+    "risk_category": "BB",
+    "status": "ACTIVE",
+    "guarantee_value": null
+  },
+  {
+    "client_id": "CLI_003",
+    "client_name": "Cliente Demo 3",
+    "product_id": "PROD_A",
+    "pd_estimate": 0.15,
+    "pd_real": 0.20,
+    "maturity": "2025-03-01",
+    "fecha_contratacion": "2024-09-15",
+    "exposicion": 75000,
+    "limite_concedido": 100000,
+    "sector_economico": "Invalid Sector",
+    "risk_category": "A",
+    "status": "ACTIVE",
+    "guarantee_value": 50000
+  },
+  {
+    "client_id": "CLI_004",
+    "client_name": null,
+    "product_id": "PROD_C",
+    "pd_estimate": 0.08,
+    "pd_real": 0.07,
+    "maturity": "2028-01-01",
+    "fecha_contratacion": "2025-01-01",
+    "exposicion": 250000,
+    "limite_concedido": 300000,
+    "sector_economico": "Servicios",
+    "risk_category": "AA",
+    "status": "ACTIVE",
+    "guarantee_value": 200000
+  }
+]

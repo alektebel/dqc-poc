@@ -1,0 +1,439 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  DQC PoC — Core infrastructure (VPC, ECS, ECR, ALB, DynamoDB, S3, IAM).
+  Issue #6: S3 bucket for data/prompts/rules.
+  Issue #10: DynamoDB for DQC store (PK: report_id=project, SK: report_sort=dqc_id).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: dqc-poc
+  AWSRegion:
+    Type: String
+    Default: eu-west-1
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: CommaDelimitedList
+  BedrockModelId:
+    Type: String
+    Default: eu.amazon.nova-micro-v1:0
+  CPUC_units:
+    Type: Number
+    Default: 1024
+  MemoryMiB:
+    Type: Number
+    Default: 4096
+
+Conditions:
+  HasVpcId: !Not [!Equals [!Ref VpcId, '']]
+
+Resources:
+  # ── S3 Bucket (Issue #6) ──
+  DqcDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-data-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToIA
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+              - StorageClass: GLACIER
+                TransitionInDays: 90
+          - Id: ExpireOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 365
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: cloudformation
+
+  DqcDataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DqcDataBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com, ecs-tasks.amazonaws.com]
+            Action: [s3:GetObject, s3:ListBucket]
+            Resource:
+              - !GetAtt DqcDataBucket.Arn
+              - !Sub "${DqcDataBucket.Arn}/*"
+
+  # ── DynamoDB Table (Issue #10) ──
+  DqcStoreTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-dqc-store"
+      AttributeDefinitions:
+        - AttributeName: report_id
+          AttributeType: S
+        - AttributeName: report_sort
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: report_id
+          KeyType: HASH
+        - AttributeName: report_sort
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification: { SSEEnabled: true }
+      TableClass: STANDARD
+
+  DqcStoreGSI:
+    Type: AWS::DynamoDB::GlobalSecondaryIndex
+    Properties:
+      TableName: !Ref DqcStoreTable
+      IndexName: DqcStatusIndex
+      KeySchema:
+        - AttributeName: dqc_status
+          KeyType: HASH
+        - AttributeName: created_at
+          KeyType: RANGE
+      Projection: { ProjectionType: ALL }
+
+  # ── IAM: Lambda execution role ──
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-lambda-exec"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
+      Policies:
+        - PolicyName: LambdaDQCPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query, dynamodb:Scan]
+                Resource: !GetAtt DqcStoreTable.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource: [!GetAtt DqcDataBucket.Arn, !Sub "${DqcDataBucket.Arn}/*"]
+      Tags: [{ Key: Project, Value: !Ref ProjectName }]
+
+  # ── IAM: ECS execution role ──
+  EcsExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-ecs-exec"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: BedrockInvokePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWSRegion}:${AWS::AccountId}:inference-profile/${BedrockModelId}"
+                  - "arn:aws:bedrock:*::foundation-model/*"
+      Tags: [{ Key: Project, Value: !Ref ProjectName }]
+
+  # ── IAM: ECS task role ──
+  EcsTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-ecs-task"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BedrockInvokePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+                Resource:
+                  - !Sub "arn:aws:bedrock:${AWSRegion}:${AWS::AccountId}:inference-profile/${BedrockModelId}"
+                  - "arn:aws:bedrock:*::foundation-model/*"
+        - PolicyName: DQCAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query]
+                Resource: !GetAtt DqcStoreTable.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource: [!GetAtt DqcDataBucket.Arn, !Sub "${DqcDataBucket.Arn}/*"]
+      Tags: [{ Key: Project, Value: !Ref ProjectName }]
+
+  # ── ECS Cluster ──
+  DqcEcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ProjectName
+
+  # ── ECR Repositories ──
+  DqcECRApi:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-api"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration: { ScanOnPush: true }
+
+  DqcECRDqc:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-dqc"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration: { ScanOnPush: true }
+
+  # ── Security Groups ──
+  DqcAlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for DQC ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+
+  DqcTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for DQC ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          SourceSecurityGroupId: !Ref DqcAlbSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 8000
+          SourceSecurityGroupId: !Ref DqcAlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+
+  # ── CloudWatch Log Group ──
+  DqcCloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${ProjectName}"
+      RetentionInDays: 14
+
+  # ── Application Load Balancer ──
+  DqcAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Ref ProjectName
+      Scheme: internet-facing
+      LoadBalancerType: application
+      SecurityGroups: [!Ref DqcAlbSecurityGroup]
+      Subnets: !Ref SubnetIds
+
+  DqcTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      TargetGroupType: ip
+      TargetType: ip
+      Name: !Sub "${ProjectName}-tg"
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      HealthCheckPath: /
+
+  DqcListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref DqcAlb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref DqcTargetGroup
+
+  # ── ECS Task Definition ──
+  DqcTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref ProjectName
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: !Ref CPUC_units
+      Memory: !Ref MemoryMiB
+      ExecutionRoleArn: !Ref EcsExecRole
+      TaskRoleArn: !Ref EcsTaskRole
+      ContainerDefinitions:
+        - Name: api
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/${ProjectName}-api:latest"
+          Essential: true
+          PortMappings: [{ ContainerPort: 8000 }]
+          Environment:
+            - Name: CORS_ORIGINS
+              Value: '*'
+            - Name: REGLLM_LLM
+              Value: bedrock
+            - Name: REGLLM_ROUTERS
+              Value: dqc
+            - Name: BEDROCK_MODEL_ID
+              Value: !Ref BedrockModelId
+            - Name: BEDROCK_REGION
+              Value: !Ref AWSRegion
+            - Name: DYNAMODB_DQC_TABLE
+              Value: !Ref DqcStoreTable
+            - Name: S3_DQC_BUCKET
+              Value: !Ref DqcDataBucket
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DqcCloudWatchLogGroup
+              awslogs-region: !Ref AWSRegion
+              awslogs-stream-prefix: api
+        - Name: dqc
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/${ProjectName}-dqc:latest"
+          Essential: true
+          PortMappings: [{ ContainerPort: 80 }]
+          Environment:
+            - Name: API_UPSTREAM
+              Value: localhost:8000
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref DqcCloudWatchLogGroup
+              awslogs-region: !Ref AWSRegion
+              awslogs-stream-prefix: dqc
+
+  # ── ECS Service ──
+  DqcService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - DqcListener
+      - DqcTargetGroup
+    Properties:
+      ServiceName: !Ref ProjectName
+      Cluster: !Ref DqcEcsCluster
+      TaskDefinition: !Ref DqcTaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups: [!Ref DqcTaskSecurityGroup]
+          Subnets: !Ref SubnetIds
+      LoadBalancers:
+        - TargetGroupArn: !Ref DqcTargetGroup
+          ContainerName: dqc
+          ContainerPort: 80
+
+  # ── CloudWatch Alarms ──
+  DqcTaskErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-task-errors"
+      AlarmDescription: Alarm when ECS task has errors
+      Namespace: AWS/ECS
+      MetricName: Errors
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ProjectName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+
+  DqcTaskLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-task-latency"
+      AlarmDescription: Alarm when ECS task latency exceeds 5s
+      Namespace: AWS/ECS
+      MetricName: AverageContainerLatency
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ProjectName
+        - Name: TargetGroup
+          Value: !Ref DqcTargetGroup
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5000
+      ComparisonOperator: GreaterThanThreshold
+
+Outputs:
+  S3BucketName:
+    Value: !Ref DqcDataBucket
+    Export: { Name: !Sub "${ProjectName}-S3BucketName" }
+
+  DqcStoreTableName:
+    Value: !Ref DqcStoreTable
+    Export: { Name: !Sub "${ProjectName}-DqcStoreTableName" }
+
+  DqcStoreTableArn:
+    Value: !GetAtt DqcStoreTable.Arn
+    Export: { Name: !Sub "${ProjectName}-DqcStoreTableArn" }
+
+  DqcApiUri:
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/${ProjectName}-api"
+    Export: { Name: !Sub "${ProjectName}-EcrApiUri" }
+
+  DqcDqcUri:
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/${ProjectName}-dqc"
+    Export: { Name: !Sub "${ProjectName}-EcrDqcUri" }
+
+  EcsClusterName:
+    Value: !Ref DqcEcsCluster
+    Export: { Name: !Sub "${ProjectName}-EcsClusterName" }
+
+  EcsServiceName:
+    Value: !Ref DqcService
+    Export: { Name: !Sub "${ProjectName}-EcsServiceName" }
+
+  AlbDns:
+    Value: !GetAtt DqcAlb.DNSName
+    Export: { Name: !Sub "${ProjectName}-AlbDns" }
+
+  AlbUrl:
+    Value: !Sub "http://${DqcAlb.DNSName}"
+    Export: { Name: !Sub "${ProjectName}-AlbHttps" }
+
+  BedrockModelId:
+    Value: !Ref BedrockModelId
+    Export: { Name: !Sub "${ProjectName}-BedrockModelId" }
