@@ -17,7 +17,7 @@ set -euo pipefail
 export REGLLM_LLM="${REGLLM_LLM:-bedrock}"
 export BEDROCK_MODEL_ID="${BEDROCK_MODEL_ID:-eu.amazon.nova-micro-v1:0}"
 export BEDROCK_REGION="${BEDROCK_REGION:-eu-west-1}"
-export REGLLM_ROUTERS="${REGLLM_ROUTERS:-dqc}"
+export REGLLM_ROUTERS="${REGLLM_ROUTERS:-dqc,dqc_consistency}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ "$REGLLM_LLM" == "bedrock" ]]; then

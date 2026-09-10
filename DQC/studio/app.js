@@ -25,7 +25,9 @@ const DEMO_SEED = [
       { k: 'ok', label: 'Revisión semántica', detail: 'La consulta responde a la regla escrita, sin condiciones añadidas.' }
     ],
     cols: ['contrato', 'ciclo', 'fec_ini_ciclo', 'fec_fin_ciclo'],
-    rows: [['0041872', '3', '2026-02-14', '2026-01-30'], ['0052310', '1', '2026-03-02', '2026-02-27'], ['0061044', '2', '2026-01-09', '2025-12-31']] },
+    rows: [['0041872', '3', '2026-02-14', '2026-01-30'], ['0052310', '1', '2026-03-02', '2026-02-27'], ['0061044', '2', '2026-01-09', '2025-12-31']],
+    bcbs239: 'P13 — Reconciliation',
+    explicacion: { explicacion: 'Las fechas de fin anteriores a las de inicio sugieren un error de captura o la inversión de los dos campos al cargar la cartera.', factor_comun: 'Datos de contratos reprogramados o con errores de grabación en el campo de fecha.', posible_causa: 'captura', recomendacion: 'Revisar la carga del campo FEC_FIN_CICLO en los contratos afectados.' } },
   { id: 'DQC_002', name: 'Importe pendiente nunca negativo', variable: 'IMP_PENDIENTE',
     desc: 'El importe pendiente de un ciclo es un saldo: cero o positivo. Un valor negativo indica un abono mal imputado.',
     sev: 'ALTA', status: 'pending', casos: 6,
@@ -38,7 +40,9 @@ const DEMO_SEED = [
       { k: 'ok', label: 'Segundo intento', detail: '6 casos detectados de 6 esperados. Precisión 100 % · Cobertura 100 %.' }
     ],
     cols: ['contrato', 'ciclo', 'imp_pendiente'],
-    rows: [['0033901', '2', '-125,40'], ['0048227', '1', '-3.410,00'], ['0071650', '4', '-18,75']] },
+    rows: [['0033901', '2', '-125,40'], ['0048227', '1', '-3.410,00'], ['0071650', '4', '-18,75']],
+    bcbs239: 'P3 — Accuracy and integrity',
+    explicacion: { explicacion: 'Valores negativos en un saldo pendiente indican abonos o reversiones mal imputadas al ciclo de recuperación.', factor_comun: 'Importes con signo invertido o abonos no segregados.', posible_causa: 'conversión', recomendacion: 'Comprobar la imputación de abonos y el redondeo de importes negativos.' } },
   { id: 'DQC_003', name: 'Código de gestor existente en el maestro', variable: 'COD_GESTOR',
     desc: 'Todo ciclo asignado debe apuntar a un gestor vivo en el maestro de gestores. Se marcan los códigos huérfanos.',
     sev: 'MEDIA', status: 'pending', casos: 23,
@@ -51,7 +55,9 @@ const DEMO_SEED = [
       { k: 'warn', label: 'Revisión semántica', detail: 'Los 2 casos no detectados son gestores dados de baja este mes: el maestro los conserva. Puede requerir un filtro por fecha de baja.' }
     ],
     cols: ['contrato', 'ciclo', 'cod_gestor'],
-    rows: [['0019334', '1', 'G-8841'], ['0027781', '2', 'G-9002'], ['0055120', '1', 'G-8841']] },
+    rows: [['0019334', '1', 'G-8841'], ['0027781', '2', 'G-9002'], ['0055120', '1', 'G-8841']],
+    bcbs239: 'P13 — Reconciliation',
+    explicacion: { explicacion: 'Ciclos cuyos gestores no existen en el maestro: integridad referencial rota entre la tabla de ciclos y el maestro de gestores.', factor_comun: 'Códigos de gestor dados de baja o ausentes del maestro.', posible_causa: 'cambio de regla', recomendacion: 'Confirmar si son bajas vigentes y filtrar por fecha de baja antes de reportar.' } },
   { id: 'DQC_004', name: 'Estado del ciclo dentro del dominio permitido', variable: 'EST_CICLO',
     desc: 'El estado solo puede tomar los cinco valores del catálogo funcional. Cualquier otro valor rompe el cuadro de mando.',
     sev: 'MEDIA', status: 'validated', casos: 2,
@@ -63,7 +69,9 @@ const DEMO_SEED = [
       { k: 'ok', label: 'Ejecutada contra los casos de prueba', detail: '2 casos detectados de 2 esperados. Precisión 100 % · Cobertura 100 %.' }
     ],
     cols: ['contrato', 'ciclo', 'est_ciclo'],
-    rows: [['0038812', '3', 'PEND_REV'], ['0064009', '1', 'gestion ']] },
+    rows: [['0038812', '3', 'PEND_REV'], ['0064009', '1', 'gestion ']],
+    bcbs239: 'P3 — Accuracy and integrity',
+    explicacion: { explicacion: 'Estados fuera del catálogo funcional con variantes de mayúsculas o espacios, y valores de catálogo antiguos no migrados.', factor_comun: 'Códigos de estado con formato o mayúsculas inconsistentes.', posible_causa: 'captura', recomendacion: 'Normalizar EST_CICLO y depurar el catálogo de estados vigente.' } },
   { id: 'DQC_005', name: 'Un solo ciclo abierto por contrato', variable: 'NUM_CICLO',
     desc: 'Un contrato no puede tener dos ciclos de recuperación abiertos a la vez. Se marcan los contratos con más de uno.',
     sev: 'ALTA', status: 'pending', casos: 9,
@@ -76,7 +84,9 @@ const DEMO_SEED = [
       { k: 'ok', label: 'Revisión semántica', detail: 'Coincide con la lógica del programa SAS revisado (ciclos_recuperacion.sas, líneas 210-244).' }
     ],
     cols: ['contrato', 'abiertos'],
-    rows: [['0022145', '2'], ['0040018', '3'], ['0059930', '2']] },
+    rows: [['0022145', '2'], ['0040018', '3'], ['0059930', '2']],
+    bcbs239: 'P6 — Adaptability',
+    explicacion: { explicacion: 'Contratos con más de un ciclo en estado abierto o en gestión: se incumple la cardinalidad de un único ciclo activo por contrato.', factor_comun: 'Contratos con ciclos duplicados o solapados.', posible_causa: 'reproceso', recomendacion: 'Revisar los ciclos duplicados y su estado en el programa SAS de altas.' } },
   { id: 'DQC_006', name: 'Fecha de alta no futura', variable: 'FEC_ALTA',
     desc: 'La fecha de alta del ciclo no puede ser posterior a la fecha de proceso.',
     sev: 'BAJA', status: 'rejected', casos: 0,
@@ -88,7 +98,9 @@ const DEMO_SEED = [
       { k: 'warn', label: 'Ejecutada contra los casos de prueba', detail: '0 casos detectados de 4 esperados: la comparación debería usar la fecha de proceso del cierre, no CURRENT_DATE.' }
     ],
     cols: ['contrato', 'ciclo', 'fec_alta'],
-    rows: [] }
+    rows: [],
+    bcbs239: 'P5 — Timeliness',
+    explicacion: null }
 ];
 
 const DEMO_MARKS = { ok: { mark: '✓', rule: '#201e1d' }, warn: { mark: '!', rule: '#dd2b0f' }, bad: { mark: '✗', rule: '#ec3013' } };
@@ -116,6 +128,9 @@ const state = {
   projectTable: '',
   draftName: 'Ciclos de recuperación — cartera 2026',
   draftTable: 'mylib.ciclos_recuperacion',
+  draftFiles: [],              // files captured at project creation (metadata)
+  queue: [],                   // 1b — rules added one by one, with live recognised fields
+  queueInput: '',
   rules: DEMO_DEFAULT_RULES,
   checks: [],                  // active project's checks
   generating: false,
@@ -127,6 +142,9 @@ const state = {
   error: '',
   banner: false,
   showTrace: true,
+  showFiles: false,            // hidden project-files viewer in the header
+  currentCases: null,          // latest cases payload for the check in review
+  currentCasesForId: null,     // guard so we don't re-fetch on every render
   apiAvailable: null,
 };
 
@@ -139,8 +157,16 @@ function saveProjects(p) { localStorage.setItem(LS_PROJECTS, JSON.stringify(p));
 let projects = loadProjects();
 if (projects.length === 0) {
   projects = [
-    { id: 'p1', name: 'Ciclos de recuperación — cartera 2026', table: 'mylib.ciclos_recuperacion', dict: 'diccionario_campos_2026.xlsx', sources: 'funcional_ciclos.docx · ciclos_recuperacion.sas' },
-    { id: 'p2', name: 'Provisiones IFRS 9 — cierre trimestral', table: 'mylib.provisiones_ifrs9', dict: 'diccionario_provisiones.xlsx', sources: 'funcional_provisiones.docx' },
+    { id: 'p1', name: 'Ciclos de recuperación — cartera 2026', table: 'mylib.ciclos_recuperacion', dict: 'diccionario_campos_2026.xlsx', sources: 'funcional_ciclos.docx · ciclos_recuperacion.sas', files: [
+      { name: 'diccionario_campos_2026.xlsx', size: 128000, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', addedAt: '2026-01-10' },
+      { name: 'funcional_ciclos.docx', size: 412000, type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', addedAt: '2026-01-10' },
+      { name: 'ciclos_recuperacion.sas', size: 98000, type: 'text/plain', addedAt: '2026-01-10' },
+      { name: 'casos_prueba.xlsx', size: 88000, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', addedAt: '2026-01-10' },
+    ] },
+    { id: 'p2', name: 'Provisiones IFRS 9 — cierre trimestral', table: 'mylib.provisiones_ifrs9', dict: 'diccionario_provisiones.xlsx', sources: 'funcional_provisiones.docx', files: [
+      { name: 'diccionario_provisiones.xlsx', size: 76000, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', addedAt: '2026-02-15' },
+      { name: 'funcional_provisiones.docx', size: 512000, type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', addedAt: '2026-02-15' },
+    ] },
   ];
   saveProjects(projects);
 }
@@ -150,6 +176,8 @@ let currentProjectId = null;
 const $ = (s, el = document) => el.querySelector(s);
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtSize = (b) => { if (b == null) return ''; const n = Number(b); if (n < 1024) return n + ' B'; if (n < 1048576) return (n / 1024).toFixed(0) + ' KB'; return (n / 1048576).toFixed(1) + ' MB'; };
+const fileIcon = (t) => { const s = String(t || '').toLowerCase(); if (s.includes('spreadsheet') || s.includes('xls') || s.includes('sheet')) return 'XLSX'; if (s.includes('word') || s.includes('doc')) return 'DOC'; if (s.includes('text') || s.includes('csv') || s.includes('plain')) return 'TXT'; if (s.includes('sas')) return 'SAS'; return 'FILE'; };
 
 /* ── api helpers ─────────────────────────────────────────────────────────── */
 async function api(path, opts = {}) {
@@ -207,6 +235,28 @@ function buildCentral() {
     + union + '\n  ) resumen_dqc\n ORDER BY incidencias DESC, severidad;\n';
 }
 
+/* Validated controls rendered in the same queued-row style as Generar 1b. */
+function centralQueueRows() {
+  const done = state.checks.filter((c) => c.status === 'validated');
+  return done.map((ch) => {
+    const fields = (ch.campos_entrada && ch.campos_entrada.length)
+      ? ch.campos_entrada
+      : [ch.variable].filter(Boolean);
+    return `<div class="studio-queue-item">
+      <span class="studio-plan-mark" style="background:var(--color-ink);color:#fff;">✓</span>
+      <div style="min-width:0;">
+        <div class="studio-plan-regla">${esc(ch.name)}${ch.bcbs239 ? ` <span class="studio-bcbs-inline">${esc(ch.bcbs239)}</span>` : ''}</div>
+        <div style="font-size:15px;color:var(--color-body);margin-top:4px;">${esc(ch.desc || ch.condicion_error || '')}</div>
+        <div class="studio-fields">${fields.length ? fields.map((f) => `<span class="studio-field-chip">${esc(f)}</span>`).join('') : ''}</div>
+      </div>
+      <div style="text-align:right;white-space:nowrap;">
+        <div class="studio-plan-casos-num">${ch.casos ?? ch.n_casos ?? '—'}</div>
+        <div class="studio-plan-casos-label">incidencias</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 /* ── data loaders ────────────────────────────────────────────────────────── */
 async function loadChecks(projectId) {
   if (DEMO) {
@@ -217,6 +267,36 @@ async function loadChecks(projectId) {
   state.checks = await api('/dqc/checks' + q);
 }
 
+async function loadCurrentCases(checkId) {
+  if (DEMO) return;
+  try {
+    const payload = await api('/dqc/checks/' + encodeURIComponent(checkId) + '/cases');
+    state.currentCases = payload && payload.available ? payload : null;
+  } catch { state.currentCases = null; }
+}
+
+async function saveFeedback(checkId, text) {
+  if (DEMO) {
+    state.checks = state.checks.map((c) => c.id === checkId ? { ...c, feedback: text } : c);
+    render(); return;
+  }
+  await api('/dqc/checks/' + encodeURIComponent(checkId) + '/feedback', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ feedback: text }),
+  });
+  state.checks = state.checks.map((c) => c.id === checkId ? { ...c, feedback: text } : c);
+}
+
+async function generateExplanation(checkId) {
+  if (DEMO) {
+    const seed = DEMO_SEED.find((c) => c.id === checkId);
+    if (seed) state.checks = state.checks.map((c) => c.id === checkId ? { ...c, explicacion: seed.explicacion } : c);
+    render(); return;
+  }
+  const expl = await api('/dqc/checks/' + encodeURIComponent(checkId) + '/explain', { method: 'POST' });
+  state.currentCases = { ...(state.currentCases || {}), explicacion: expl };
+  render();
+}
+
 /* ── header ──────────────────────────────────────────────────────────────── */
 function renderHeader() {
   const header = $('#studio-header');
@@ -224,6 +304,8 @@ function renderHeader() {
   if (state.screen === 'project') {
     bar.hidden = false;
     const c = counts();
+    const project = projects.find((x) => x.id === currentProjectId);
+    const files = (project && project.files) || [];
     bar.innerHTML = `
       <div class="studio-project-meta">
         <span class="studio-project-name">${esc(state.projectName)}</span>
@@ -234,9 +316,22 @@ function renderHeader() {
         <button class="${state.projectTab === 'generar' ? 'active' : ''}" data-tab="generar">Generar</button>
         <button class="${state.projectTab === 'revisar' ? 'active' : ''}" data-tab="revisar">Revisar<span class="nav-badge">${c.pending}</span></button>
       </nav>
+      <div class="studio-files-wrap">
+        <button class="studio-files-toggle" id="toggle-files" title="Archivos del proyecto" aria-expanded="${state.showFiles}">⧉</button>
+        ${state.showFiles ? `<div class="studio-files-panel">
+          <div class="studio-files-head">Archivos del proyecto <span>${files.length}</span></div>
+          ${files.length ? files.map((f) => `
+            <div class="studio-files-item">
+              <span class="studio-files-icon">${fileIcon(f.type)}</span>
+              <span class="studio-files-name">${esc(f.name)}</span>
+              <span class="studio-files-meta">${fmtSize(f.size)}${f.addedAt ? ' · ' + esc(f.addedAt) : ''}</span>
+            </div>`).join('') : '<div class="studio-files-empty">Sin archivos adjuntos.</div>'}
+        </div>` : ''}
+      </div>
       <button class="studio-exit" id="exit-project">Salir del proyecto</button>`;
     bar.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => { state.projectTab = b.dataset.tab; state.reviewIdx = 0; render(); }));
-    $('#exit-project').addEventListener('click', () => { state.screen = 'projects'; currentProjectId = null; state.checks = []; render(); });
+    $('#toggle-files').addEventListener('click', () => { state.showFiles = !state.showFiles; render(); });
+    $('#exit-project').addEventListener('click', () => { state.screen = 'projects'; currentProjectId = null; state.checks = []; state.showFiles = false; render(); });
   } else {
     bar.hidden = true;
   }
@@ -254,7 +349,7 @@ function renderProjects() {
         <div class="studio-projects-name">${esc(p.name)}</div>
         <div class="studio-projects-table">${esc(p.table)}</div>
       </div>
-      <div class="studio-projects-meta"><span>Diccionario: ${esc(p.dict)}</span><span>Fuentes: ${esc(p.sources)}</span></div>
+      <div class="studio-projects-meta"><span>Diccionario: ${esc(p.dict)}</span><span>Fuentes: ${esc(p.sources)}</span><span class="studio-muted">Archivos: ${(p.files && p.files.length) || 0}</span></div>
       <div style="display:flex;align-items:center;gap:20px;">
         <div class="studio-projects-count">
           <div class="studio-projects-count-num">${p.id === currentProjectId ? c.total : '—'}</div>
@@ -278,9 +373,19 @@ function renderWizard() {
   const main = $('#studio-main');
   main.className = 'studio-main narrow';
   const step2Color = state.wizardStep === 2 ? 'var(--color-text)' : 'var(--color-muted)';
+  const filesMarkup = state.draftFiles.length ? `
+    <div class="studio-wizard-files">
+      ${state.draftFiles.map((f, i) => `
+        <div class="studio-wizard-file">
+          <span class="studio-files-icon">${fileIcon(f.type)}</span>
+          <span class="studio-wizard-file-name">${esc(f.name)}</span>
+          <span class="studio-files-meta">${fmtSize(f.size)}</span>
+          <button class="studio-files-remove" data-remove-file="${i}" aria-label="Quitar ${esc(f.name)}">×</button>
+        </div>`).join('')}
+    </div>` : '';
   const stepMarkup = state.wizardStep === 1 ? `
     <h1 class="studio-h1">Datos del proyecto</h1>
-    <p class="studio-lede-sm">Solo dos campos son obligatorios. Los archivos ya detectados en la carpeta del proyecto se adjuntan solos: revísalos en el paso siguiente.</p>
+    <p class="studio-lede-sm">Solo dos campos son obligatorios. Los archivos del proyecto se adjuntan aquí, al crear el proyecto.</p>
     <label class="studio-field">
       <span class="studio-field-label">Nombre del proyecto</span>
       <input type="text" class="studio-input" id="wiz-name" value="${esc(state.draftName)}" placeholder="Ciclos de recuperación — cartera 2026">
@@ -289,6 +394,11 @@ function renderWizard() {
       <span class="studio-field-label">Tabla objetivo</span>
       <input type="text" class="studio-input studio-input-mono" id="wiz-table" value="${esc(state.draftTable)}">
     </label>
+    <div class="studio-field">
+      <span class="studio-field-label">Archivos del proyecto <span class="studio-muted" style="font-weight:400;text-transform:none;">(diccionario, funcional, casos…)</span></span>
+      <label class="studio-file">${state.draftFiles.length ? '✓ ' + state.draftFiles.length + ' archivo(s)' : 'Añadir archivos…'}<input type="file" id="wiz-files" multiple hidden></label>
+      ${filesMarkup}
+    </div>
     <button class="studio-btn" id="wiz-continue">Continuar</button>
     <div style="margin-top:24px;"><button class="studio-link" id="wiz-cancel">Cancelar</button></div>` : `
     <h1 class="studio-h1">Revisar y crear</h1>
@@ -296,8 +406,7 @@ function renderWizard() {
     <dl class="studio-dl">
       <div class="studio-dl-row"><dt class="studio-dt">Nombre</dt><dd class="studio-dd">${esc(state.draftName)}</dd></div>
       <div class="studio-dl-row"><dt class="studio-dt">Tabla objetivo</dt><dd class="studio-dd studio-dd-mono">${esc(state.draftTable)}</dd></div>
-      <div class="studio-dl-row"><dt class="studio-dt">Diccionario de campos</dt><dd class="studio-dd">diccionario_campos_2026.xlsx <span class="studio-muted" style="font-size:16px;font-weight:400;">· 142 campos · hoja «Campos»</span></dd></div>
-      <div class="studio-dl-row"><dt class="studio-dt">Fuentes de entrada</dt><dd class="studio-dd" style="font-size:18px;">funcional_ciclos.docx · ciclos_recuperacion.sas · casos_prueba.xlsx</dd></div>
+      <div class="studio-dl-row"><dt class="studio-dt">Archivos adjuntos</dt><dd class="studio-dd" style="font-size:18px;">${state.draftFiles.length ? state.draftFiles.map((f) => esc(f.name)).join(' · ') : 'Ninguno'}</dd></div>
     </dl>
     <button class="studio-btn" id="wiz-create">Crear proyecto</button>
     <div style="margin-top:24px;"><button class="studio-link" id="wiz-back">Volver al paso 1</button></div>`;
@@ -317,6 +426,16 @@ function renderWizard() {
   if (state.wizardStep === 1) {
     $('#wiz-name').addEventListener('input', (e) => { state.draftName = e.target.value; });
     $('#wiz-table').addEventListener('input', (e) => { state.draftTable = e.target.value; });
+    $('#wiz-files').addEventListener('change', (e) => {
+      const files = Array.from(e.target.files || []);
+      const meta = files.map((f) => ({ name: f.name, size: f.size, type: f.type || '', addedAt: new Date().toISOString().slice(0, 10) }));
+      state.draftFiles = state.draftFiles.concat(meta);
+      render();
+    });
+    main.querySelectorAll('[data-remove-file]').forEach((b) => b.addEventListener('click', () => {
+      state.draftFiles = state.draftFiles.filter((_, i) => String(i) !== b.dataset.removeFile);
+      render();
+    }));
     $('#wiz-continue').addEventListener('click', () => { state.wizardStep = 2; render(); });
     $('#wiz-cancel').addEventListener('click', () => { state.screen = 'projects'; render(); });
   } else {
@@ -326,8 +445,14 @@ function renderWizard() {
 }
 
 function createProject() {
-  const p = { id: 'p' + Date.now(), name: state.draftName, table: state.draftTable, dict: 'diccionario_campos_2026.xlsx', sources: 'funcional_ciclos.docx' };
+  const files = state.draftFiles.map((f) => ({ ...f }));
+  const p = {
+    id: 'p' + Date.now(), name: state.draftName, table: state.draftTable,
+    dict: files.find((f) => /\.xlsx$/i.test(f.name))?.name || '—',
+    sources: files.map((f) => f.name).join(' · '), files,
+  };
   projects.push(p); saveProjects(projects);
+  state.draftFiles = []; state.wizardStep = 1;
   openProject(p.id);
 }
 
@@ -356,7 +481,7 @@ function renderResumen() {
     const st = DEMO ? DEMO_STATUS[ch.status] : statusStyle(ch.status);
     return `<div class="studio-table-row checks" data-open-check="${esc(ch.id)}">
       <div><span class="studio-tag" style="background:${st.bg};color:${st.fg};">${st.estado}</span></div>
-      <div style="min-width:0;"><div style="font-size:18px;font-weight:600;">${esc(ch.name)}</div><div style="font-size:15px;color:var(--color-body);margin-top:2px;">${esc(ch.desc || '')}</div></div>
+      <div style="min-width:0;"><div style="font-size:18px;font-weight:600;">${esc(ch.name)}${ch.bcbs239 ? ` <span class="studio-bcbs-inline">${esc(ch.bcbs239)}</span>` : ''}</div><div style="font-size:15px;color:var(--color-body);margin-top:2px;">${esc(ch.desc || '')}</div></div>
       <div class="studio-var">${esc(ch.variable || '')}</div>
       <div class="studio-count-cell">${ch.casos ?? ch.n_casos ?? ''}</div>
     </div>`;
@@ -393,6 +518,7 @@ function renderResumen() {
     <section style="margin-top:56px;">
       <h2 class="studio-h2">Consulta centralizada</h2>
       <p style="margin:8px 0 20px;font-size:17px;color:var(--color-body);max-width:62ch;text-wrap:pretty;">${esc(centralIntro)}</p>
+      ${c.validated ? `<div class="studio-queue" style="margin:24px 0 8px;">${centralQueueRows()}</div>` : ''}
       <pre class="studio-sql">${esc(central)}</pre>
       <button class="studio-btn" id="download-query" style="margin-top:24px;">${c.validated ? 'Descargar consulta centralizada (.sql)' : 'Descargar consulta centralizada (aún sin controles validados)'}</button>
     </section>`;
@@ -410,6 +536,58 @@ function renderResumen() {
   }));
 }
 
+/* ── Generar (1b): una regla por fila, reconocimiento en vivo ──────────── */
+const DEMO_FIELDS = ['PD_ESTIMADA', 'EAD_TOTAL', 'COD_GESTOR', 'EST_CICLO', 'IMP_PENDIENTE', 'FEC_INI_CICLO', 'FEC_FIN_CICLO', 'LGD_ESTIMADA', 'ECL', 'STAGE_IFRS9', 'NUM_CICLO', 'FEC_ALTA'];
+
+function queueRules() {
+  return state.queue.map((q) => q.text).filter(Boolean);
+}
+
+function demoRecognize() {
+  const rules = queueRules();
+  const results = rules.map((rule) => {
+    const found = DEMO_FIELDS.filter((f) => rule.toUpperCase().includes(f));
+    return { rule, campos: found, n_campos: found.length, ambiguity: found.length === 0, motivo: '' };
+  });
+  applyRecognition(results);
+}
+
+async function refreshRecognition() {
+  if (DEMO) { demoRecognize(); return; }
+  const rules = queueRules();
+  if (!rules.length || !state.dictionaryFile) return;
+  const fd = form({ rules: JSON.stringify(rules), table_name: state.projectTable, sheet: '' });
+  fd.append('dictionary', state.dictionaryFile);
+  try {
+    const res = await api('/dqc/recognize', { method: 'POST', body: fd });
+    applyRecognition(res.results || []);
+  } catch (e) { /* live recognition is best-effort */ }
+}
+
+let recogTimer = null;
+function scheduleRecognition() {
+  clearTimeout(recogTimer);
+  recogTimer = setTimeout(refreshRecognition, 350);
+}
+
+function applyRecognition(results) {
+  const byRule = {};
+  results.forEach((r) => { byRule[r.rule] = r; });
+  state.queue.forEach((q) => {
+    const r = byRule[q.text];
+    if (r) { q.campos = r.campos; q.ambiguity = r.ambiguity; q.motivo = r.motivo || ''; }
+  });
+  render();
+}
+
+function addQueueRule() {
+  const text = (state.queueInput || '').trim();
+  if (!text) return;
+  state.queue.push({ text, campos: [], ambiguity: true, motivo: '' });
+  state.queueInput = '';
+  scheduleRecognition(); render();
+}
+
 function renderGenerar() {
   const main = $('#studio-main');
   main.className = 'studio-main wide';
@@ -424,7 +602,7 @@ function renderGenerar() {
           <div class="studio-plan-grid">
             <div class="studio-plan-mark" style="background:${it.markBg};color:${it.markFg};">${it.mark}</div>
             <div style="min-width:0;">
-              <div class="studio-plan-regla">${esc(it.regla)}</div>
+              <div class="studio-plan-regla">${esc(it.regla)}${it.bcbs239 ? ` <span class="studio-bcbs-inline">${esc(it.bcbs239)}</span>` : ''}</div>
               <div class="studio-plan-fase">${esc(it.fase)}</div>
               ${it.trace && it.trace.length ? `<ol class="studio-trace-ol">${it.trace.map((t) => `<li style="--t-rule:${t.rule};"><span class="t-mark" style="color:${t.rule};">${t.mark}</span><span style="min-width:0;"><span class="t-label">${esc(t.label)}</span><span class="t-detail">${esc(t.detail)}</span></span></li>`).join('')}</ol>` : ''}
             </div>
@@ -443,30 +621,62 @@ function renderGenerar() {
           <button class="studio-btn studio-btn-md" id="review-now">Revisar ahora</button>
         </div>` : ''}
     </section>` : '';
+  const ruleCount = queueRules().length;
+  const countLabel = ruleCount ? ' (' + ruleCount + ' regla' + (ruleCount === 1 ? '' : 's') + ')' : '';
   main.innerHTML = `
     <h1 class="studio-h1">Generar controles</h1>
-    <p class="studio-lede-sm">Escribe una regla por línea, en lenguaje natural. El asistente busca los campos en el diccionario, construye la consulta y la prueba contra los casos antes de dártela.</p>
+    <p class="studio-lede-sm">Añade una regla y la app te dirá al momento qué campos del diccionario ha reconocido. Una regla ambigua se ve antes de generar, no después.</p>
     <div class="studio-file-row">
       <label class="studio-file">${state.dictionaryFile ? '✓ ' + esc(state.dictionaryFile.name) : 'Subir diccionario Excel (.xlsx)'}<input type="file" accept=".xlsx,.xls" id="dict-file" hidden></label>
       <label class="studio-file">${state.casesFile ? '✓ ' + esc(state.casesFile.name) : 'Excel de datos — casos (opcional)'}<input type="file" accept=".xlsx,.xls" id="cases-file" hidden></label>
       ${DEMO ? '<button class="studio-link" id="load-demo">Cargar diccionario de demostración</button>' : ''}
     </div>
-    <label class="studio-field">
-      <span class="studio-field-label">Reglas — una por línea</span>
-      <textarea class="studio-textarea" id="rules" rows="6">${esc(state.rules)}</textarea>
-    </label>
-    <button class="studio-btn" id="start-gen" ${state.generating ? 'disabled' : ''}>${state.generating ? 'Generando…' : 'Generar controles'}</button>
+    <div class="studio-mode">
+      <div class="studio-queue-add">
+        <input type="text" class="studio-input studio-input-mono" id="queue-input" placeholder="Escribe una regla…" value="${esc(state.queueInput)}">
+        <button class="studio-btn studio-btn-md" id="queue-add">Añadir regla</button>
+      </div>
+      <div class="studio-queue">
+        ${state.queue.map((q, i) => `
+          <div class="studio-queue-item">
+            <span class="studio-plan-mark" style="background:${q.ambiguity ? 'var(--color-accent-600)' : 'var(--color-ink)'};color:#fff;">${q.ambiguity ? '!' : '✓'}</span>
+            <div style="min-width:0;">
+              <div class="studio-plan-regla">${esc(q.text)}</div>
+              <div class="studio-fields">${q.campos && q.campos.length ? q.campos.map((c) => `<span class="studio-field-chip">${esc(c)}</span>`).join('') : `<span class="studio-muted">${esc(q.motivo || 'sin campos reconocidos')}</span>`}</div>
+            </div>
+            <button class="studio-files-remove" data-rm-queue="${i}" title="Quitar">×</button>
+          </div>`).join('') || '<p class="studio-muted">Sin reglas todavía. Añade la primera.</p>'}
+      </div>
+    </div>
+    <button class="studio-btn" id="start-gen" ${state.generating ? 'disabled' : ''} style="margin-top:28px;">${state.generating ? 'Generando…' : 'Generar controles' + countLabel}</button>
     <div class="studio-error" id="gen-error" hidden></div>
     ${planMarkup}`;
-  $('#dict-file').addEventListener('change', (e) => { state.dictionaryFile = e.target.files[0] || null; render(); });
+  $('#dict-file').addEventListener('change', (e) => { state.dictionaryFile = e.target.files[0] || null; scheduleRecognition(); render(); });
   $('#cases-file').addEventListener('change', (e) => { state.casesFile = e.target.files[0] || null; render(); });
-  $('#rules').addEventListener('input', (e) => { state.rules = e.target.value; });
   $('#start-gen').addEventListener('click', () => startGenerate());
+  wireGenerarEvents(main);
   if (DEMO) $('#load-demo').addEventListener('click', () => {
-    fetch('assets/demo/diccionario_demo.xlsx').then((r) => r.blob()).then((b) => { state.dictionaryFile = new File([b], 'diccionario_demo.xlsx'); render(); });
+    fetch('assets/demo/diccionario_demo.xlsx').then((r) => r.blob()).then((b) => { state.dictionaryFile = new File([b], 'diccionario_demo.xlsx'); scheduleRecognition(); render(); });
   });
   if (state.genDone) $('#review-now').addEventListener('click', () => { state.projectTab = 'revisar'; state.reviewIdx = 0; render(); });
+  scheduleRecognition();
 }
+
+function wireGenerarEvents(main) {
+  const input = $('#queue-input');
+  if (input) {
+    input.addEventListener('input', (e) => { state.queueInput = e.target.value; });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addQueueRule(); } });
+  }
+  const add = $('#queue-add');
+  if (add) add.addEventListener('click', addQueueRule);
+  main.querySelectorAll('[data-rm-queue]').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    state.queue = state.queue.filter((_, i) => String(i) !== b.dataset.rmQueue);
+    scheduleRecognition(); render();
+  }));
+}
+
 
 function renderRevisar() {
   const main = $('#studio-main');
@@ -495,23 +705,47 @@ function renderRevisar() {
     });
     return;
   }
+  // fetch the detected-cases payload for the current check once (real mode),
+  // so the review can show examples, the trace and the case explanation.
+  if (!DEMO && state.currentCasesForId !== cur.id) {
+    state.currentCasesForId = cur.id;
+    state.currentCases = null;
+    loadCurrentCases(cur.id).then(() => render());
+  }
+  const casesPayload = DEMO ? cur : (state.currentCases || {});
   const pend = pendingList();
   const reviewedTotal = c.validated + c.rejected;
   const sev = cur.sev ? DEMO_SEV[cur.sev] : { bg: '#f8f4f4', fg: '#444141' };
-  const traceMarkup = state.showTrace && cur.trace && cur.trace.length ? `
+  const bcbs = cur.bcbs239 || '';
+  const trace = casesPayload.trace || cur.trace || [];
+  const traceMarkup = state.showTrace && trace.length ? `
     <section class="studio-review-section">
       <h2 class="studio-section-head">Cómo se decidió</h2>
-      <ol class="studio-trace">${cur.trace.map((t) => {
+      <ol class="studio-trace">${trace.map((t) => {
         const m = DEMO_MARKS[t.k] || { mark: '✓', rule: '#201e1d' };
         return `<li class="studio-trace-item" style="--trace-rule:${m.rule};"><span class="studio-trace-mark" style="color:${m.rule};">${m.mark}</span><span style="min-width:0;"><span class="studio-trace-label">${esc(t.label)}</span><span class="studio-trace-detail">${esc(t.detail)}</span></span></li>`;
       }).join('')}</ol>
     </section>` : '';
-  const cols = cur.cols || cur.columnas || [];
-  const rows = (cur.rows || cur.ejemplos || []).map((row) => {
+  const cols = casesPayload.columnas || cur.cols || cur.columnas || [];
+  const rows = (casesPayload.ejemplos || cur.rows || cur.ejemplos || []).map((row) => {
     const cells = Array.isArray(row) ? row : cols.map((c) => row[c] ?? '');
     return `<tr>${cells.map((cell) => `<td>${esc(cell)}</td>`).join('')}</tr>`;
   }).join('');
-  const cases = cur.casos ?? cur.n_casos ?? 0;
+  const cases = casesPayload.n_casos ?? cur.casos ?? cur.n_casos ?? 0;
+  const expl = casesPayload.explicacion || cur.explicacion;
+  const explHasContent = !!(expl && (expl.explicacion || expl.factor_comun || expl.posible_causa || expl.recomendacion));
+  const explMarkup = explHasContent ? `
+    <div class="studio-expl">
+      ${expl.explicacion ? `<p class="studio-expl-body">${esc(expl.explicacion)}</p>` : ''}
+      ${expl.factor_comun ? `<div class="studio-expl-row"><span class="studio-expl-k">Factor común</span><span class="studio-expl-v">${esc(expl.factor_comun)}</span></div>` : ''}
+      ${expl.posible_causa ? `<div class="studio-expl-row"><span class="studio-expl-k">Causa probable</span><span class="studio-expl-v">${esc(expl.posible_causa)}</span></div>` : ''}
+      ${expl.recomendacion ? `<div class="studio-expl-row"><span class="studio-expl-k">Recomendación</span><span class="studio-expl-v">${esc(expl.recomendacion)}</span></div>` : ''}
+    </div>` : `
+    <div class="studio-expl-empty">
+      <p class="studio-muted">Explica qué tienen en común los casos detectados y su causa probable.</p>
+      <button class="studio-btn-outline studio-btn-md" id="gen-expl">Generar análisis de los casos</button>
+    </div>`;
+  const feedback = cur.feedback || '';
   main.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;">
       <span style="font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--color-muted);">Control ${reviewedTotal + 1} de ${c.total}</span>
@@ -521,6 +755,7 @@ function renderRevisar() {
     <div class="studio-review-head">
       <span class="studio-sev" style="background:${sev.bg};color:${sev.fg};">${esc(cur.sev || '')}</span>
       <span class="studio-mono" style="font-size:16px;color:var(--color-accent);">${esc(cur.variable || '')}</span>
+      ${bcbs ? `<span class="studio-bcbs" title="BCBS 239">${esc(bcbs)}</span>` : ''}
     </div>
     <h1 class="studio-review-title">${esc(cur.name)}</h1>
     <p class="studio-review-desc">${esc(cur.desc || '')}</p>
@@ -534,12 +769,27 @@ function renderRevisar() {
       <p style="margin:20px 0 16px;font-size:17px;color:var(--color-body);text-wrap:pretty;">${esc(cur.hint || cur.condicion_error || '')}</p>
       ${cols.length ? `<div class="studio-cases-wrap"><table class="studio-cases"><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="studio-muted">Sin casos en el Excel de pruebas.</p>'}
     </section>
+    <section class="studio-review-section">
+      <h2 class="studio-section-head">Análisis de los casos</h2>
+      ${cases > 0 ? explMarkup : '<p class="studio-muted">Sin casos que analizar todavía.</p>'}
+    </section>
+    <section class="studio-review-section">
+      <h2 class="studio-section-head">Feedback</h2>
+      <textarea class="studio-textarea" id="feedback" rows="3" placeholder="Deja aquí tu valoración, observaciones o correcciones sobre este control.">${esc(feedback)}</textarea>
+      <button class="studio-btn studio-btn-md" id="save-feedback" style="margin-top:12px;">Guardar feedback</button>
+    </section>
     <div class="studio-review-actions">
       <button class="studio-btn-validate" id="validate">Validar este control</button>
       <button class="studio-btn-reject" id="reject">Rechazar</button>
     </div>`;
   $('#validate').addEventListener('click', () => setStatus(cur.id, 'validated'));
   $('#reject').addEventListener('click', () => setStatus(cur.id, 'rejected'));
+  const explBtn = $('#gen-expl');
+  if (explBtn) explBtn.addEventListener('click', () => generateExplanation(cur.id));
+  $('#save-feedback').addEventListener('click', async () => {
+    const txt = $('#feedback').value || '';
+    try { await saveFeedback(cur.id, txt); } catch (e) { state.error = e.message; render(); }
+  });
 }
 
 /* ── status helpers for real mode ────────────────────────────────────────── */
@@ -565,10 +815,12 @@ function planFromDemo(seedIdx) {
 }
 
 async function startGenerate() {
-  const lines = state.rules.split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines = queueRules();
   if (!lines.length || state.generating) return;
   const errBox = $('#gen-error');
   if (errBox) errBox.hidden = true;
+  // sync the free-text backing field so the plan / demo path always has the rules
+  state.rules = lines.join('\n');
   state.generating = true; state.genDone = false; state.plan = lines.map((r) => ({ regla: r, fase: 'En espera', casos: '—', trace: [], mark: '', markBg: 'var(--color-bg)', markFg: 'var(--color-text)' }));
   render();
   if (DEMO) { await demoGenerate(lines); return; }
@@ -613,6 +865,7 @@ function onStreamEvent(ev) {
     } else if (d.estado === 'completado') {
       it.mark = '✓'; it.markBg = '#201e1d'; it.markFg = '#ffffff'; it.fase = 'Control listo para revisar';
       it.casos = d.validacion?.n_casos != null ? String(d.validacion.n_casos) : String((d.dqcs || []).length);
+      it.bcbs239 = d.dqcs && d.dqcs[0] ? (d.dqcs[0].bcbs239 || '') : '';
       if (d.trace) it.trace = d.trace.map((t) => ({ mark: t.resultado === 'no' ? '!' : '✓', rule: t.resultado === 'no' ? '#dd2b0f' : '#201e1d', label: t.pregunta || t.accion || t.fase || 'Paso', detail: t.detalle || '' }));
     } else if (d.estado === 'ambigua') {
       it.mark = '!'; it.markBg = '#dd2b0f'; it.markFg = '#ffffff'; it.fase = 'Ambigua — ' + (d.falta || '');

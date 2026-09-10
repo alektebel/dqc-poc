@@ -455,6 +455,30 @@ def select_relevant_fields(fields: list[FieldEntry], instructions: list[str],
     return [f for f in fields if id(f) in chosen]
 
 
+def recognize_fields(fields: list[FieldEntry], rule: str,
+                     max_fields: int = 8, min_score: float = 3.0) -> list[tuple[FieldEntry, float]]:
+    """Fast, LLM-free live field recognition for ONE rule.
+
+    Ranks every dictionary field by how well it matches the rule text
+    (same lexical scorer as :func:`select_relevant_fields`: exact field name,
+    name tokens, description/formula word overlap). A field counts as
+    *recognized* when its score clears ``min_score``. Returns the top fields
+    (highest score first, dictionary order for ties). Used by the Studio's
+    live "reconoce los campos" so the UI can answer as the user types without
+    paying for an LLM call per keystroke.
+    """
+    words = {_norm(w) for w in _WORD_RE.findall(rule)}
+    if not words:
+        return []
+    scored: list[tuple[FieldEntry, float]] = []
+    for entry in fields:
+        score = _lexical_score(entry, words)
+        if score >= min_score:
+            scored.append((entry, score))
+    scored.sort(key=lambda pair: (-pair[1], pair[0].name))
+    return scored[:max_fields]
+
+
 def fields_to_text(fields: list[FieldEntry],
                    budget: int = PROMPT_CHAR_BUDGET) -> tuple[str, int]:
     """Render field lines under the char budget; returns (text, used)."""

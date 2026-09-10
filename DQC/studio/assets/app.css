@@ -324,3 +324,99 @@ h2.studio-h2 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.
 
 /* — demo mode file prep — */
 .studio-file-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; align-items: center; }
+
+/* — BCBS 239 badge — */
+.studio-bcbs {
+  font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 5px 10px; background: var(--color-ink); color: #ffffff; white-space: nowrap;
+}
+.studio-bcbs-inline {
+  display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: 0.02em;
+  padding: 2px 7px; background: var(--color-neutral-300); color: var(--color-neutral-900);
+  vertical-align: middle; white-space: nowrap;
+}
+
+/* — case explanation — */
+.studio-expl { border: 2px solid var(--color-ink); padding: 20px 20px 8px; }
+.studio-expl-body { margin: 0 0 16px; font-size: 18px; color: var(--color-body); text-wrap: pretty; }
+.studio-expl-row {
+  display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 16px;
+  padding: 10px 0; border-top: 2px solid var(--color-divider);
+}
+.studio-expl-k {
+  font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--color-accent-800);
+}
+.studio-expl-v { font-size: 17px; color: var(--color-text); text-wrap: pretty; }
+.studio-expl-empty {
+  border: 2px solid var(--color-divider); padding: 20px; display: flex;
+  align-items: center; gap: 20px; flex-wrap: wrap;
+}
+.studio-expl-empty p { margin: 0; flex: 1; }
+
+/* — project files (hidden viewer in the header) — */
+.studio-files-wrap { position: relative; display: flex; align-items: center; }
+.studio-files-toggle {
+  font: inherit; font-size: 15px; line-height: 1; color: var(--color-muted);
+  background: var(--color-bg); border: 2px solid var(--color-divider);
+  padding: 8px 12px; cursor: pointer;
+}
+.studio-files-toggle:hover { color: var(--color-accent); border-color: var(--color-ink); }
+.studio-files-panel {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 30;
+  width: 320px; max-height: 320px; overflow-y: auto;
+  background: var(--color-bg); border: 2px solid var(--color-ink); padding: 14px 16px;
+}
+.studio-files-head {
+  font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--color-body); border-bottom: 2px solid var(--color-ink); padding-bottom: 10px;
+  margin-bottom: 8px; display: flex; justify-content: space-between;
+}
+.studio-files-item {
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 10px;
+  align-items: center; padding: 8px 0; border-bottom: 2px solid var(--color-divider);
+}
+.studio-files-icon {
+  font-size: 11px; font-weight: 800; padding: 3px 5px; background: var(--color-ink);
+  color: #ffffff; text-align: center;
+}
+.studio-files-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-files-meta { font-size: 13px; color: var(--color-muted); white-space: nowrap; }
+.studio-files-empty { font-size: 15px; color: var(--color-muted); padding: 10px 0; }
+
+/* — wizard project files — */
+.studio-wizard-files { margin-top: 12px; }
+.studio-wizard-file {
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto auto; gap: 10px;
+  align-items: center; padding: 8px 0; border-bottom: 2px solid var(--color-divider);
+}
+.studio-wizard-file-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-files-remove {
+  font: inherit; font-size: 18px; line-height: 1; color: var(--color-muted);
+  background: none; border: 0; cursor: pointer; padding: 2px 6px;
+}
+.studio-files-remove:hover { color: var(--color-red); }
+
+/* — Generar approach 1b (una regla por fila) — */
+.studio-mode { margin-bottom: 8px; }
+
+/* queue */
+.studio-queue-add { display: flex; gap: 18px; margin-bottom: 24px; align-items: stretch; }
+.studio-queue-add .studio-input {
+  flex: 1; padding: 18px 22px; font-size: 18px; line-height: 1.7; letter-spacing: 0.01em;
+}
+.studio-queue { border: 2px solid var(--color-ink); }
+.studio-queue-item {
+  display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 20px;
+  align-items: start; padding: 22px 20px; border-bottom: 2px solid var(--color-divider);
+}
+.studio-queue-item:last-child { border-bottom: 0; }
+.studio-queue-item .studio-plan-regla { line-height: 1.6; text-wrap: pretty; }
+
+/* recognised-field chips */
+.studio-fields { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.studio-field-chip {
+  font-size: 13px; font-weight: 700; font-family: var(--font-mono);
+  padding: 3px 9px; background: var(--color-accent-100); color: var(--color-accent-800);
+  border: 2px solid var(--color-accent-600);
+}

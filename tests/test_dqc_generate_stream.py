@@ -302,7 +302,10 @@ def test_execution_error_feeds_correction_loop(client, monkeypatch,
     events = _parse_sse(_post(client, "PD <= 1", with_data=True).text)
     last_item = [d for e, d in events if e == "item"][-1]
     assert last_item["estado"] == "completado"
-    assert "falla al ejecutarse" in fake.calls[-1]["user"]
+    # the corrective generation prompt carried the execution error back to the
+    # model (the completion also runs a best-effort case-explanation call, so
+    # search the recorded calls rather than assuming the last one is the gen)
+    assert any("falla al ejecutarse" in c["user"] for c in fake.calls)
 
 
 # ── optional features: value grounding + semantic judge (off by default) ────
@@ -321,8 +324,9 @@ def test_grounding_injects_real_values_into_prompt(client, monkeypatch,
     fases = [d.get("fase") for e, d in events if e == "item"
              and d["estado"] == "en_curso"]
     assert "grounding" in fases
-    gen_call = fake.calls[-1]["user"]           # the generation prompt
-    assert "VALORES REALES OBSERVADOS" in gen_call
+    # the generation prompt (not the completion's case-explanation call)
+    gen_call = next(c["user"] for c in fake.calls
+                    if "VALORES REALES OBSERVADOS" in c["user"])
     assert "'1.5'" in gen_call                  # a real PD value from the Excel
     assert [d for e, d in events if e == "item"][-1]["estado"] == "completado"
 

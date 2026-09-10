@@ -147,6 +147,14 @@ Usa solo funciones y operadores ANSI (=, <>, <=, >=, AND, OR, NOT, IN,
 BETWEEN, IS NULL, ABS, COALESCE, UPPER, SUBSTR...). No uses PROC, DATA
 steps, macros ni formatos SAS.
 
+- Clasifica el control según el principio de BCBS 239 MÁS relevante en
+  `bcbs239` con el formato "P<n> — <nombre>" (ej. "P3 — Accuracy and
+  integrity"). Regla: nulos/dominio/rangos → P3; integridad referencial →
+  P13; completitud → P4; fórmulas → P7; coherencia entre campos → P13.
+
+PRINCIPIOS BCBS 239 (código: nombre):
+{BCBS239_PRINCIPLES}
+
 Responde SOLO con JSON: {"dqcs": [<un único objeto>]}. Esquema del objeto:
 {
   "dqc_id": "DQC_<CAMPO>_<NNN>",
@@ -160,7 +168,8 @@ Responde SOLO con JSON: {"dqcs": [<un único objeto>]}. Esquema del objeto:
   "referencia_regulatoria": "<del diccionario o 'Sin referencia en diccionario'>",
   "umbral": "<si aplica>",
   "periodicidad": "mensual",
-  "justificacion": "<por qué>"
+  "justificacion": "<por qué>",
+  "bcbs239": "P<n> — <nombre del principio>"
 }"""
 
 
@@ -189,7 +198,10 @@ def generate_sas(rule: str, fields: list, table_name: str, client,
             + "\n- ".join(feedback)
             + "\nCorrige la consulta manteniendo la misma regla."
         )
-    return client.chat_json(system=SAS_GEN_SYSTEM,
+    from src.knowledge import bcbs239 as _bcbs239
+    system = SAS_GEN_SYSTEM.replace(
+        "{BCBS239_PRINCIPLES}", _bcbs239.describe_principles())
+    return client.chat_json(system=system,
                             user=user[:dict_ai.PROMPT_CHAR_BUDGET],
                             max_tokens=2048)
 
@@ -278,6 +290,64 @@ def judge_dqc(rule: str, sql: str, descripcion: str, condicion_error: str,
         "correcto": bool(result.get("correcto", True)),
         "confianza": confianza,
         "motivo": str(result.get("motivo") or "").strip(),
+    }
+
+
+# ── case explanation (common factor of the detected examples) ────────────────
+
+EXPLAIN_SYSTEM = """\
+Eres un analista de calidad de datos bancarios. Recibes un control DQC, la
+condición que marca una fila como errónea, y una muestra de los casos
+detectados sobre datos reales.
+
+Tu tarea es explicar QUÉ tienen en común esos casos: identificar el patrón,
+la causa probable (error de captura, conversión, cambio de regla, dato
+huérfano, etc.) y qué revisión conviene hacer. NO inventes datos.
+
+Responde SOLO JSON:
+{
+  "explicacion": "<explicación clara de por qué esos casos son incorrectos y qué revelan>",
+  "factor_comun": "<el factor/patrón común más relevante, en una frase>",
+  "posible_causa": "<causa probable: captura|conversión|cambio de regla|dato huérfano|reproceso|otro — una etiqueta>",
+  "recomendacion": "<acción de revisión recomendada>"
+}"""
+
+
+def explain_cases(descripcion: str, condicion_error: str,
+                  columnas: list[str], ejemplos: list[dict],
+                  client, rule: str = "") -> dict:
+    """One fresh, stateless agent summarises the detected cases and names
+    their common factor. ``ejemplos`` is a list of the violating rows (as
+    dicts). Best-effort: on LLM failure it returns an empty explanation so
+    the UI never blocks."""
+    if not ejemplos:
+        return {"explicacion": "", "factor_comun": "", "posible_causa": "",
+                "recomendacion": ""}
+    import json as _json
+
+    sample = _json.dumps(ejemplos[:12], ensure_ascii=False)
+    user = (
+        f"CONTROL DQC:\n{rule}\n{descripcion}\n\n"
+        f"CONDICIÓN DE ERROR:\n{condicion_error}\n\n"
+        f"COLUMNAS DE INTERÉS:\n{', '.join(columnas) or '—'}\n\n"
+        f"CASOS DETECTADOS (muestra de {len(ejemplos)}):\n{sample}"
+    )
+    try:
+        result = client.chat_json(system=EXPLAIN_SYSTEM,
+                                  user=user[:dict_ai.PROMPT_CHAR_BUDGET],
+                                  max_tokens=1024)
+    except Exception as exc:  # noqa: BLE001 — explanation is best-effort
+        logger.warning("explain agent failed: %s", exc)
+        return {"explicacion": "", "factor_comun": "", "posible_causa": "",
+                "recomendacion": ""}
+    if not isinstance(result, dict):
+        return {"explicacion": "", "factor_comun": "", "posible_causa": "",
+                "recomendacion": ""}
+    return {
+        "explicacion": str(result.get("explicacion") or "").strip(),
+        "factor_comun": str(result.get("factor_comun") or "").strip(),
+        "posible_causa": str(result.get("posible_causa") or "").strip(),
+        "recomendacion": str(result.get("recomendacion") or "").strip(),
     }
 
 

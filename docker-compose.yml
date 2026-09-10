@@ -67,13 +67,19 @@ services:
     environment:
       LOG_LEVEL: INFO
       CORS_ORIGINS: "*"
-      REGLLM_ROUTERS: dqc
-      REGLLM_LLM: "${REGLLM_LLM:-auto}"
+      REGLLM_ROUTERS: dqc,dqc_consistency
+      # Generation backend. Default now uses the "nan" OpenAI-compatible
+      # endpoint (qwen3.6). Override per command, e.g. REGLLM_LLM=ollama
+      # docker compose up -d api, or set REGLLM_LLM=stub for a no-model run.
+      REGLLM_LLM: "${REGLLM_LLM:-api}"
+      REGLLM_API_URL: "${REGLLM_API_URL:-https://api.nan.builders}"
+      REGLLM_API_KEY: "${NAN_API_KEY}"
+      REGLLM_API_MODEL: "${NAN_API_MODEL:-qwen3.6}"
       OLLAMA_URL: "http://ollama:11434"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-qwen3:4b}"
       BEDROCK_MODEL_ID: "${BEDROCK_MODEL_ID:-eu.amazon.nova-micro-v1:0}"
       BEDROCK_REGION: "${BEDROCK_REGION:-eu-west-1}"
-      REGLLM_LLM_TIMEOUT: "300"
+      REGLLM_LLM_TIMEOUT: "${REGLLM_LLM_TIMEOUT:-120}"
     volumes:
       - ./data:/app/data
     healthcheck:

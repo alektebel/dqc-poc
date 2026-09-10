@@ -13,12 +13,14 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, File, Form, UploadFile
 from pydantic import BaseModel
 
 from src.knowledge import get_client, get_inspect_client
+from src.knowledge import bcbs239
 from training.dq import checks_db
 
 from . import dqc_dictionary as dict_ai
@@ -45,6 +47,7 @@ class DQCItem(BaseModel):
     umbral: str = ""
     periodicidad: str = ""
     justificacion: str = ""
+    bcbs239: str = ""
 
 
 class GenerateResponse(BaseModel):
@@ -93,6 +96,9 @@ class CheckRecord(BaseModel):
     umbral: str | None = None
     periodicidad: str | None = None
     justificacion: str | None = None
+    bcbs239: str | None = None
+    feedback: str | None = None
+    explicacion: str | None = None
     created_at: str | None = None
     validated_at: str | None = None
 
@@ -126,6 +132,10 @@ class StatusUpdate(BaseModel):
     status: str  # "validated" | "rejected"
 
 
+class FeedbackUpdate(BaseModel):
+    feedback: str
+
+
 class DashboardResponse(BaseModel):
     ready: bool
     pending_visible: int
@@ -134,6 +144,18 @@ class DashboardResponse(BaseModel):
     oculto: int
     sql: str | None = None
     checks: list[CheckRecord] = []
+
+
+class RecognizeRule(BaseModel):
+    rule: str
+    campos: list[str] = []
+    n_campos: int = 0
+    ambiguity: bool = False          # True ⇒ no dictionary field recognized
+    motivo: str = ""
+
+
+class RecognizeResponse(BaseModel):
+    results: list[RecognizeRule]
 
 
 # ── Prompt ──────────────────────────────────────────────────────────────────
@@ -152,7 +174,16 @@ Para CADA instrucción genera al menos un control DQC como consulta SQL:
   (fórmulas documentadas) según la instrucción.
 - Si la instrucción no se puede fundamentar con el diccionario, indica \
   "Sin referencia en diccionario" en `referencia_regulatoria`.
+- Clasifica cada DQC según el principio de BCBS 239 MÁS relevante en \
+  `bcbs239`, usando el formato "P<n> — <nombre>" (ej. "P3 — Accuracy and \
+  integrity"). Regla de asignación: nulos/dominio/rangos de un campo → P3; \
+  integridad referencial/cruce de tablas → P13; completitud → P4; \
+  fórmulas/derivaciones → P7; coherencia entre campos → P13; \
+  oportunidad/periodo → P5.
 - No omitas ninguna instrucción.
+
+PRINCIPIOS BCBS 239 (código: nombre):
+{BCBS239_PRINCIPLES}
 
 Responde SOLO con JSON: {"dqcs": [...]}. Cada objeto:
 {
@@ -167,7 +198,8 @@ Responde SOLO con JSON: {"dqcs": [...]}. Cada objeto:
   "referencia_regulatoria": "<del diccionario o 'Sin referencia en diccionario'>",
   "umbral": "<si aplica>",
   "periodicidad": "mensual",
-  "justificacion": "<por qué>"
+  "justificacion": "<por qué>",
+  "bcbs239": "P<n> — <nombre del principio>"
 }
 """
 
@@ -236,6 +268,10 @@ def _persist_dqc_items(items: list[DQCItem],
         for it in items:
             sev = _SEV_MAP.get(it.severidad, it.severidad or "MED")
             cat = _CAT_MAP.get(it.tipo, it.tipo or "consistencia")
+            # Normalise the BCBS 239 code to a canonical "P<n>" and render
+            # the display label; fall back to the tipo-derived default.
+            code = bcbs239.normalise(it.bcbs239) or bcbs239.default_for_type(it.tipo)
+            label = bcbs239.display(code) or None
             try:
                 cid = checks_db.insert_check(
                     conn,
@@ -256,6 +292,7 @@ def _persist_dqc_items(items: list[DQCItem],
                     umbral=it.umbral,
                     periodicidad=it.periodicidad,
                     justificacion=it.justificacion,
+                    bcbs239=label,
                 )
                 ids.append((it, cid))
             except sqlite3.IntegrityError as exc:
@@ -275,7 +312,7 @@ CREATE TABLE IF NOT EXISTS check_eval_cases (
 )"""
 
 _CASE_KEYS = ("n_casos", "columnas", "ejemplos", "precision", "recall",
-              "esperados", "trace")
+              "esperados", "trace", "explicacion")
 
 
 def _save_check_cases(entries: list[tuple[str, dict]]) -> None:
@@ -477,6 +514,8 @@ def _run_generation_agent(batch: list[str], fields: list, table_name: str,
     the dictionary fields relevant to it. Raises on LLM failure."""
     relevant = dict_ai.select_relevant_fields(fields, batch)
     dict_text, sent = dict_ai.fields_to_text(relevant)
+    system = DQC_SYSTEM_PROMPT.replace(
+        "{BCBS239_PRINCIPLES}", bcbs239.describe_principles())
     user_prompt = (
         f"Tabla objetivo: {table_name}\n\n"
         f"DICCIONARIO DE CAMPOS ({sent} campos relevantes de {len(fields)}):\n"
@@ -485,7 +524,7 @@ def _run_generation_agent(batch: list[str], fields: list, table_name: str,
         + "\n".join(f"{offset + i + 1}. {ln}" for i, ln in enumerate(batch))
     )
     result = get_client().chat_json(
-        system=DQC_SYSTEM_PROMPT, user=user_prompt, max_tokens=4096)
+        system=system, user=user_prompt, max_tokens=4096)
     return _parse_dqc_items(result)
 
 
@@ -884,6 +923,23 @@ async def generate_dqc_stream(
 
             trace.append({"paso": "resultado", "estado": "completado",
                           "n_casos": (validacion or {}).get("n_casos")})
+
+            # ── case explanation: when the query ran and surfaced examples,
+            # name what they have in common (one fresh agent, best-effort).
+            explicacion = None
+            if validacion and validacion.get("ejecutada") and validacion.get("ejemplos"):
+                yield _sse("item", {"id": eid, "estado": "en_curso",
+                                    "fase": "explicacion"})
+                explicacion = react.explain_cases(
+                    rule=items[0].descripcion or entry["regla"],
+                    descripcion=items[0].descripcion,
+                    condicion_error=items[0].condicion_error,
+                    columnas=validacion.get("columnas") or [],
+                    ejemplos=validacion.get("ejemplos") or [],
+                    client=get_client())
+                agents += 1
+                validacion["explicacion"] = explicacion
+
             for it in items:
                 it.prev_id = entry.get("prev_id") or ""
                 if validacion and validacion.get("ejecutada"):
@@ -893,6 +949,7 @@ async def generate_dqc_stream(
             yield _sse("item", {"id": eid, "estado": "completado",
                                 "dqcs": [i.model_dump() for i in items],
                                 "validacion": validacion,
+                                "explicacion": explicacion,
                                 "trace": trace})
 
         _dedupe_ids(dqcs)
@@ -946,6 +1003,62 @@ async def generate_dqc_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── Live rule recognition (Generar approach 1b) ──────────────────────────────
+
+
+def _parse_rules_field(raw: str) -> list[str]:
+    """Parse the ``rules`` form field — a JSON array of strings, or plain
+    newline-separated text — into a clean list of rule lines."""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return _split_instructions(raw)
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, str):
+        return _split_instructions(value)
+    return []
+
+
+def _amp_rule(rule: str, fields: list) -> list[str]:
+    """Recognized field names for one rule (lexical, LLM-free)."""
+    matched = dict_ai.recognize_fields(fields, rule)
+    return [f.name.upper() for f, _ in matched]
+
+
+@router.post("/recognize", response_model=RecognizeResponse)
+async def recognize_fields_endpoint(
+    dictionary: UploadFile = File(..., description="Field dictionary (.xlsx)"),
+    rules: str = Form("", description="Rules as JSON array or newline text"),
+    table_name: str = Form("mylib.ciclos_recuperacion"),
+    sheet: str | None = Form(None, description="Workbook sheet holding the dictionary"),
+    column_mapping: str | None = Form(None, description="JSON role->header mapping"),
+    infer_formats: bool = Form(True, description="LLM-infer missing field types"),
+) -> RecognizeResponse:
+    """Live field recognition: given the dictionary and one or more rule
+    lines, report which dictionary fields each rule mentions. Deliberately
+    LLM-free (lexical) so the Studio can re-run it on every keystroke and the
+    user sees the recognized fields change as they type."""
+    _require_xlsx(dictionary)
+    raw = await dictionary.read()
+    mapping = _parse_mapping_form(column_mapping)
+    fields, _sheet, _src, _fmt, _agents = _resolve_dictionary_context(
+        raw, sheet, mapping, infer_formats, dictionary.filename)
+    rule_list = _parse_rules_field(rules)
+    results: list[RecognizeRule] = []
+    for rule in rule_list:
+        campos = _amp_rule(rule, fields)
+        ambiguity = len(campos) == 0
+        motivo = ("La regla no menciona ningún campo conocido del "
+                  "diccionario.") if ambiguity else ""
+        results.append(RecognizeRule(rule=rule, campos=campos,
+                                     n_campos=len(campos),
+                                     ambiguity=ambiguity, motivo=motivo))
+    return RecognizeResponse(results=results)
 
 
 # ── Cases evaluation of stored DQCs ──────────────────────────────────────────
@@ -1044,6 +1157,83 @@ def check_cases(check_id: str) -> dict:
             **json.loads(row["payload"])}
 
 
+@router.post("/checks/{check_id}/explain")
+def explain_check(check_id: str) -> dict:
+    """Generate (and cache) the natural-language explanation of the detected
+    cases for a stored check — what they have in common, the probable cause
+    and the recommended review action. No-op-friendly: returns an empty
+    explanation when the check has no cases or the LLM is unavailable."""
+    from fastapi import HTTPException
+
+    conn = _db()
+    try:
+        check = checks_db.get_check(conn, check_id)
+        if not check:
+            raise HTTPException(status_code=404, detail=f"check_id {check_id} not found")
+        # Reuse the last-evaluation cases payload if present.
+        conn.execute(_EVAL_CASES_SCHEMA)
+        row = conn.execute(
+            "SELECT payload FROM check_eval_cases WHERE check_id = ?",
+            (check_id,)).fetchone()
+    finally:
+        conn.close()
+
+    payload = {}
+    if row:
+        try:
+            payload = json.loads(row["payload"])
+        except json.JSONDecodeError:
+            payload = {}
+    columnas = payload.get("columnas") or []
+    ejemplos = payload.get("ejemplos") or []
+    if not ejemplos:
+        return {"available": False, "explicacion": "", "factor_comun": "",
+                "posible_causa": "", "recomendacion": "",
+                "message": "Este control no tiene casos detectados todavía."}
+
+    expl = react.explain_cases(
+        rule=check["name"] or "",
+        descripcion=check.get("description") or "",
+        condicion_error=check.get("condicion_error") or "",
+        columnas=columnas, ejemplos=ejemplos, client=get_client())
+
+    # Persist both to the check row and to the cached cases payload so the
+    # review UI can show it next time without another LLM call.
+    conn = _db()
+    try:
+        checks_db.set_explicacion(conn, check_id,
+                                  _format_explicacion(expl))
+        conn.execute(_EVAL_CASES_SCHEMA)
+        row = conn.execute(
+            "SELECT payload FROM check_eval_cases WHERE check_id = ?",
+            (check_id,)).fetchone()
+        merged = dict(payload)
+        merged["explicacion"] = expl
+        conn.execute(
+            "INSERT OR REPLACE INTO check_eval_cases VALUES (?, ?, ?)",
+            (check_id, json.dumps(merged, ensure_ascii=False),
+             datetime.now(timezone.utc).isoformat(timespec="seconds")))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"available": True, **expl}
+
+
+def _format_explicacion(expl: dict) -> str:
+    """Flatten the explanation payload into a single stored string."""
+    parts = []
+    if expl.get("explicacion"):
+        parts.append(expl["explicacion"])
+    if expl.get("factor_comun"):
+        parts.append(f"Factor común: {expl['factor_comun']}")
+    if expl.get("posible_causa"):
+        parts.append(f"Causa probable: {expl['posible_causa']}")
+    if expl.get("recomendacion"):
+        parts.append(f"Recomendación: {expl['recomendacion']}")
+    return "\n".join(parts)
+
+
 # ── Validation pipeline ───────────────────────────────────────────────────────
 
 @router.get("/checks", response_model=list[CheckRecord])
@@ -1087,6 +1277,21 @@ def update_check_status(check_id: str, body: StatusUpdate) -> CheckRecord:
             raise HTTPException(status_code=409, detail="DQC status could not be updated")
         row = checks_db.get_check(conn, check_id)
         return CheckRecord(**row)
+    finally:
+        conn.close()
+
+
+@router.post("/checks/{check_id}/feedback", response_model=CheckRecord)
+def update_check_feedback(check_id: str, body: FeedbackUpdate) -> CheckRecord:
+    from fastapi import HTTPException
+    conn = _db()
+    try:
+        existing = checks_db.get_check(conn, check_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"check_id {check_id} not found")
+        if not checks_db.set_feedback(conn, check_id, body.feedback):
+            raise HTTPException(status_code=409, detail="feedback could not be updated")
+        return CheckRecord(**checks_db.get_check(conn, check_id))
     finally:
         conn.close()
 

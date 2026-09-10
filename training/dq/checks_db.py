@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS checks (
     umbral                TEXT,
     periodicidad          TEXT,
     justificacion         TEXT,
+    -- BCBS 239 classification (e.g. "P3 — Accuracy and integrity")
+    bcbs239               TEXT,
+    -- reviewer feedback left on the control
+    feedback              TEXT,
+    -- LLM explanation of the detected cases / common factor
+    explicacion           TEXT,
     created_at            TEXT NOT NULL,
     validated_at          TEXT,
     -- data-quality project this check belongs to (NULL = unscoped/legacy)
@@ -72,6 +78,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     have = {r[1] for r in conn.execute("PRAGMA table_info(checks)")}
     if "project_id" not in have:
         conn.execute("ALTER TABLE checks ADD COLUMN project_id TEXT")
+    if "bcbs239" not in have:
+        conn.execute("ALTER TABLE checks ADD COLUMN bcbs239 TEXT")
+    if "feedback" not in have:
+        conn.execute("ALTER TABLE checks ADD COLUMN feedback TEXT")
+    if "explicacion" not in have:
+        conn.execute("ALTER TABLE checks ADD COLUMN explicacion TEXT")
     # index lives here (not in _SCHEMA) so it is only created once the
     # column is guaranteed to exist, on fresh and migrated DBs alike
     conn.execute("CREATE INDEX IF NOT EXISTS idx_checks_project ON checks(project_id)")
@@ -130,6 +142,9 @@ def insert_check(
     umbral: str | None = None,
     periodicidad: str | None = None,
     justificacion: str | None = None,
+    bcbs239: str | None = None,
+    feedback: str | None = None,
+    explicacion: str | None = None,
     project_id: str | None = None,
 ) -> str:
     """Insert one check; returns its id. Idempotent on (rule_id, sql)
@@ -149,12 +164,12 @@ def insert_check(
            (check_id, rule_id, name, description, severity, category, sql,
             visible, status, reward, variable, tipo, condicion_error,
             campos_entrada, referencia_regulatoria, umbral, periodicidad,
-            justificacion, created_at, project_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            justificacion, bcbs239, feedback, explicacion, created_at, project_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (cid, rule_id, name, description, severity, category, sql,
          int(visible), status, reward, variable, tipo, condicion_error,
          campos_json, referencia_regulatoria, umbral, periodicidad,
-         justificacion, _now(), project_id),
+         justificacion, bcbs239, feedback, explicacion, _now(), project_id),
     )
     conn.commit()
     return cid
@@ -173,6 +188,26 @@ def set_status(conn: sqlite3.Connection, check_id: str, status: str) -> bool:
         "UPDATE checks SET status=?, validated_at=COALESCE(?, validated_at) "
         "WHERE check_id=? AND NOT (status='rejected' AND ?='validated')",
         (status, validated_at, check_id, status),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_feedback(conn: sqlite3.Connection, check_id: str, feedback: str) -> bool:
+    """Store reviewer feedback on a check. Returns True if a row was updated."""
+    cur = conn.execute(
+        "UPDATE checks SET feedback=? WHERE check_id=?",
+        (feedback, check_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_explicacion(conn: sqlite3.Connection, check_id: str, explicacion: str) -> bool:
+    """Store the LLM case explanation on a check. Returns True if updated."""
+    cur = conn.execute(
+        "UPDATE checks SET explicacion=? WHERE check_id=?",
+        (explicacion, check_id),
     )
     conn.commit()
     return cur.rowcount > 0

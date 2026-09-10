@@ -41,8 +41,8 @@ app.add_middleware(
 # generator surface only. Routers that fail to import (e.g. an optional
 # heavy dependency missing) are skipped with a warning instead of taking
 # the whole API down.
-_ALL_ROUTERS = ("dqc",)
-_enabled = [r.strip() for r in os.getenv("REGLLM_ROUTERS", "dqc").split(",") if r.strip()]
+_ALL_ROUTERS = ("dqc", "dqc_consistency")
+_enabled = [r.strip() for r in os.getenv("REGLLM_ROUTERS", "dqc,dqc_consistency").split(",") if r.strip()]
 if "all" in _enabled:
     _enabled = list(_ALL_ROUTERS)
 

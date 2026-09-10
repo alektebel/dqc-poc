@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    REGLLM_ROUTERS=dqc
+    REGLLM_ROUTERS=dqc,dqc_consistency
 
 # Slim, DQC-only dependency set (no torch/kuzu/chromadb/sklearn/umap — those
 # back the SAS field-diff explainer and knowledge-graph builder, neither of
