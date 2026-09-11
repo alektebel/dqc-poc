@@ -3,6 +3,7 @@
 The probe's value is the mapping from a raw error to an actionable code, so
 that is what is tested. No SAS server is contacted.
 """
+import os
 import socket
 import ssl
 import sys
@@ -187,3 +188,62 @@ def test_ask_takes_the_default_without_a_terminal(monkeypatch):
     monkeypatch.setattr(ss.sys.stdin, "isatty", lambda: False)
     assert ss.ask("Host", "sas.corp") == "sas.corp"
     assert ss.ask("Host", "") == ""
+
+
+# ── SAS jar discovery / classpath ────────────────────────────────────────
+
+def _fake_sashome(tmp_path):
+    """A SASHome laid out the way a real one is: versioned filenames, nested
+    under SASVersionedJarRepository."""
+    plugins = tmp_path / "SASVersionedJarRepository" / "eclipse" / "plugins"
+    plugins.mkdir(parents=True)
+    for name in ("sas.core_904400.0.0.20180221190000_f0f04fe.jar",
+                 "sas.security.sspi_904400.0.0.20180221190000_f0f04fe.jar",
+                 "sas.svc.connection_904400.0.0.20180221190000_f0f04fe.jar",
+                 "log4j_1.2.17.0.0.jar",
+                 "sas.unrelated_1.0.jar"):
+        (plugins / name).touch()
+    return plugins
+
+
+def test_finds_versioned_jars_not_just_bare_names(tmp_path):
+    """A real SASHome has sas.core_904400.0.0.<build>.jar, so searching for
+    'sas.core.jar' finds nothing — the original detector's bug."""
+    _fake_sashome(tmp_path)
+    found = ss.find_sas_jars(extra_roots=(tmp_path,))
+    for stem in ss.SAS_JARS:
+        assert stem in found, stem
+        assert found[stem].endswith(".jar")
+
+
+def test_jar_discovery_does_not_pull_in_unrelated_jars(tmp_path):
+    _fake_sashome(tmp_path)
+    found = ss.find_sas_jars(extra_roots=(tmp_path,))
+    assert not any("unrelated" in path for path in found.values())
+
+
+def test_saspyiom_is_reported_as_coming_from_saspy_not_sas(tmp_path):
+    """Four jars come from a SAS client install; the fifth ships with the
+    Python package, which is the part people miss."""
+    _fake_sashome(tmp_path)
+    found = ss.find_sas_jars(extra_roots=(tmp_path,))
+    missing = ss.report_jars(found)
+    assert len(missing) == 1
+    assert "saspyiom.jar" in missing[0] and "pip install saspy" in missing[0]
+
+
+def test_classpath_uses_the_platform_separator_and_keeps_order(tmp_path):
+    _fake_sashome(tmp_path)
+    cp = ss.build_classpath(ss.find_sas_jars(extra_roots=(tmp_path,)))
+    parts = cp.split(os.pathsep)
+    assert len(parts) == 4
+    assert "sas.core" in parts[0]          # required order, not dict order
+
+
+def test_classpath_is_empty_when_nothing_is_found(tmp_path):
+    assert ss.build_classpath(ss.find_sas_jars(extra_roots=(tmp_path,))) == ""
+
+
+def test_every_required_jar_has_a_recovery_hint():
+    for line in ss.report_jars({}):
+        assert ".jar —" in line

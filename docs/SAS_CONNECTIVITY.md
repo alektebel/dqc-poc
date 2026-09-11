@@ -28,12 +28,44 @@ end by invoking the probe, and leaves a reusable profile behind.
 - saspy is configured by a *Python module*, not a dotfile, which is why the
   config is generated rather than templated — and why the setup tells you to
   put `~/.dqc` on `PYTHONPATH`.
-- It looks for `sas.core.jar` and `sas.security.sspi.jar` in the usual install
-  roots. These ship with a SAS client installation and are **not on PyPI**; if
-  they are absent the connection cannot be made from that machine regardless of
-  anything else, which is worth knowing before being prompted for a password.
+- It builds the Java classpath for you — see below.
 - Prerequisites are reported as install commands, and the profile is saved
   anyway so it is ready once they are resolved.
+
+### The Java classpath
+
+saspy's IOM access method runs over Java and needs **five** jars. This is the
+step that blocks people, because four of them are not on PyPI and the fifth is
+not in SASHome.
+
+| Jar | Comes from |
+|---|---|
+| `sas.core.jar` | SAS client installation |
+| `sas.security.sspi.jar` | SAS client installation |
+| `sas.svc.connection.jar` | SAS client installation |
+| `log4j.jar` (or `log4j-api` + `log4j-core` on newer SAS) | SAS client installation |
+| `saspyiom.jar` | **saspy itself** — `<site-packages>/saspy/java/` |
+
+**In a real SASHome the four SAS jars are versioned**, e.g.
+`sas.core_904400.0.0.20180221190000_f0f04fe.jar`, usually under
+`SASVersionedJarRepository/eclipse/plugins/`. Searching for the bare name finds
+nothing, which is why the setup script globs the stem:
+
+```bash
+find /opt/sas /usr/local/SASHome -name 'sas.core*.jar' 2>/dev/null
+python -c "import saspy, pathlib; print(pathlib.Path(saspy.__file__).parent / 'java')"
+```
+
+The wizard searches the usual install roots plus saspy's own package
+directory, prints what it found, and names the ones still missing with where
+to get each. The classpath it builds is **explicit jar paths** joined by the
+platform separator (`:` on Linux/macOS, `;` on Windows) rather than a `dir/*`
+wildcard — the jars are typically spread across several directories, and a
+wildcard would also drag in every other jar in `SASVersionedJarRepository`.
+
+If the SAS jars are absent, the connection cannot be made from that machine no
+matter what else is configured. Worth establishing before anyone is prompted
+for a password.
 
 ## Diagnosing one — `scripts/sas_probe.py`
 

@@ -121,25 +121,85 @@ def check_dependencies(mode: str) -> list[str]:
     return missing
 
 
-def find_sas_jars() -> list[str]:
-    """Look for the SAS client jars saspy's IOM access needs.
+# saspy's IOM access method runs over Java and needs five jars. Four ship with
+# a SAS *client* installation; the fifth ships with saspy itself.
+SAS_JARS = ("sas.core", "sas.security.sspi", "sas.svc.connection", "log4j")
+SASPY_JAR = "saspyiom"
 
-    They ship with a SAS client installation and are not on PyPI, so if they
-    are absent the connection cannot be made from this machine no matter what
-    else is configured — worth finding out before prompting for a password.
+# In a real SASHome these are versioned — sas.core_904400.0.0.<build>.jar — so
+# searching for the bare "sas.core.jar" finds nothing. Glob the stem instead.
+SAS_ROOTS = (
+    Path("/opt/sas"), Path("/opt/SASHome"), Path("/usr/local/SASHome"),
+    Path("C:/Program Files/SASHome"), Path("C:/SASHome"),
+    Path.home() / "sas", Path.home() / "SASHome",
+)
+
+
+def find_saspy_jar_dir() -> Path | None:
+    """saspyiom.jar lives inside the installed saspy package, not in SASHome."""
+    try:
+        import saspy
+    except ImportError:
+        return None
+    candidate = Path(saspy.__file__).parent / "java"
+    return candidate if candidate.is_dir() else None
+
+
+def find_sas_jars(extra_roots: tuple[Path, ...] = ()) -> dict[str, str]:
+    """Locate each required jar. Returns {stem: path}; missing stems are absent.
+
+    Searches the SAS install roots for versioned names, and the installed
+    saspy package for saspyiom.jar.
     """
-    wanted = ("sas.core.jar", "sas.security.sspi.jar", "sas.svc.connection.jar")
-    roots = [Path("/opt/sas"), Path("/usr/local/SASHome"), Path("C:/Program Files/SASHome"),
-             Path.home() / "sas"]
-    found: list[str] = []
-    for root in roots:
+    found: dict[str, str] = {}
+    for root in tuple(extra_roots) + SAS_ROOTS:
         if not root.exists():
             continue
-        for name in wanted:
-            for hit in root.rglob(name):
-                found.append(str(hit))
-                break
+        for stem in SAS_JARS:
+            if stem in found:
+                continue
+            for pattern in (f"{stem}.jar", f"{stem}_*.jar", f"{stem}-*.jar"):
+                hit = next(iter(sorted(root.rglob(pattern))), None)
+                if hit:
+                    found[stem] = str(hit)
+                    break
+
+    jar_dir = find_saspy_jar_dir()
+    if jar_dir:
+        hit = next(iter(sorted(jar_dir.glob(f"{SASPY_JAR}*.jar"))), None)
+        if hit:
+            found[SASPY_JAR] = str(hit)
+        # saspy also bundles copies of the SAS jars for some deployments.
+        for stem in SAS_JARS:
+            if stem not in found:
+                hit = next(iter(sorted(jar_dir.glob(f"{stem}*.jar"))), None)
+                if hit:
+                    found[stem] = str(hit)
     return found
+
+
+def build_classpath(found: dict[str, str]) -> str:
+    """Explicit jar paths joined with the platform separator.
+
+    Explicit rather than a `dir/*` wildcard: the jars are usually spread across
+    several directories, and a wildcard would also drag in every other jar in
+    SASVersionedJarRepository.
+    """
+    return os.pathsep.join(found[stem] for stem in
+                           (*SAS_JARS, SASPY_JAR) if stem in found)
+
+
+def report_jars(found: dict[str, str]) -> list[str]:
+    """Which required jars are still missing, with where to get them."""
+    missing = [s for s in (*SAS_JARS, SASPY_JAR) if s not in found]
+    lines = []
+    for stem in missing:
+        if stem == SASPY_JAR:
+            lines.append(f"{stem}.jar — ships with saspy; run `pip install saspy`")
+        else:
+            lines.append(f"{stem}.jar — from a SAS client installation "
+                         f"(look under SASHome/SASVersionedJarRepository)")
+    return lines
 
 
 # ── wizard ────────────────────────────────────────────────────────────────
@@ -172,18 +232,21 @@ def wizard(existing: Profile) -> Profile:
         p.user = ask("User", existing.user or os.getenv("USER", ""))
         p.encoding = ask("SAS session encoding", existing.encoding or "latin1")
 
-        jars = find_sas_jars()
-        if jars:
-            print(f"\n  Found SAS client jars:")
-            for j in jars:
-                print(f"    {j}")
-            default_cp = ":".join(sorted({str(Path(j).parent) + "/*" for j in jars}))
-        else:
-            print("\n  ! No SAS client jars found in the usual locations.")
-            print("    saspy's IOM access needs sas.core.jar and")
-            print("    sas.security.sspi.jar from a SAS client installation.")
-            print("    They are not on PyPI — ask whoever administers SAS.")
-            default_cp = existing.classpath
+        found = find_sas_jars()
+        if found:
+            print("\n  Found:")
+            for stem, path in found.items():
+                print(f"    {stem + '.jar':<26} {path}")
+        missing = report_jars(found)
+        if missing:
+            print("\n  ! Missing jars — saspy's IOM access cannot connect without them:")
+            for line in missing:
+                print(f"    {line}")
+            print("\n    They are not on PyPI (except saspyiom.jar). In a SASHome they")
+            print("    are versioned, e.g. sas.core_904400.0.0.<build>.jar, so searching")
+            print("    for the bare name finds nothing:")
+            print("      find /opt/sas -name 'sas.core*.jar'")
+        default_cp = build_classpath(found) or existing.classpath
         p.classpath = ask("Java classpath for the SAS jars", default_cp)
 
     p.table = ask("A table to test a 1-row SELECT against", existing.table)
