@@ -85,6 +85,10 @@ autoresearch/mlflow.db
 data/sas/sessions/test_session*/
 
 # CloudFormation — generated build artifacts (not committed)
+# deploy.sh stages every Lambda/layer bundle under .build/ and writes the
+# packaged template next to the source one.
+DQC/cloudformation/.build/
+DQC/cloudformation/.dqc-serverless.packaged.yaml
 DQC/cloudformation/lambda-layers/langchain-layer/.layer-venv/
 DQC/cloudformation/lambda-functions/*/.lambda-venv/
 DQC/cloudformation/lambda-layers/langchain-layer/layer.zip

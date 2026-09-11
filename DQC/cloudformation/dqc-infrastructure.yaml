@@ -1,6 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  DQC PoC — Core infrastructure (VPC, ECS, ECR, ALB, DynamoDB, S3, IAM).
+  DQC PoC — Core infrastructure (ECS, ECR, ALB, DynamoDB, S3, IAM).
+  Requires an existing VPC and subnets: this stack never creates networking.
   Issue #6: S3 bucket for data/prompts/rules.
   Issue #10: DynamoDB for DQC store (PK: report_id=project, SK: report_sort=dqc_id).
 
@@ -18,15 +19,12 @@ Parameters:
   BedrockModelId:
     Type: String
     Default: eu.amazon.nova-micro-v1:0
-  CPUC_units:
+  TaskCpu:
     Type: Number
     Default: 1024
   MemoryMiB:
     Type: Number
     Default: 4096
-
-Conditions:
-  HasVpcId: !Not [!Equals [!Ref VpcId, '']]
 
 Resources:
   # ── S3 Bucket (Issue #6) ──
@@ -70,6 +68,9 @@ Resources:
             Resource:
               - !GetAtt DqcDataBucket.Arn
               - !Sub "${DqcDataBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
 
   # ── DynamoDB Table (Issue #10) ──
   DqcStoreTable:
@@ -83,6 +84,8 @@ Resources:
           AttributeType: S
         - AttributeName: created_at
           AttributeType: S
+        - AttributeName: dqc_status
+          AttributeType: S
       KeySchema:
         - AttributeName: report_id
           KeyType: HASH
@@ -94,18 +97,16 @@ Resources:
         Enabled: true
       SSESpecification: { SSEEnabled: true }
       TableClass: STANDARD
-
-  DqcStoreGSI:
-    Type: AWS::DynamoDB::GlobalSecondaryIndex
-    Properties:
-      TableName: !Ref DqcStoreTable
-      IndexName: DqcStatusIndex
-      KeySchema:
-        - AttributeName: dqc_status
-          KeyType: HASH
-        - AttributeName: created_at
-          KeyType: RANGE
-      Projection: { ProjectionType: ALL }
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      GlobalSecondaryIndexes:
+        - IndexName: DqcStatusIndex
+          KeySchema:
+            - AttributeName: dqc_status
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection: { ProjectionType: ALL }
 
   # ── IAM: Lambda execution role ──
   LambdaExecutionRole:
@@ -226,11 +227,10 @@ Resources:
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
+          ToPort: 80
           CidrIp: 0.0.0.0/0
       SecurityGroupEgress:
         - IpProtocol: '-1'
-          FromPort: 0
-          ToPort: 0
           CidrIp: 0.0.0.0/0
 
   DqcTaskSecurityGroup:
@@ -241,14 +241,14 @@ Resources:
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
+          ToPort: 80
           SourceSecurityGroupId: !Ref DqcAlbSecurityGroup
         - IpProtocol: tcp
           FromPort: 8000
+          ToPort: 8000
           SourceSecurityGroupId: !Ref DqcAlbSecurityGroup
       SecurityGroupEgress:
         - IpProtocol: '-1'
-          FromPort: 0
-          ToPort: 0
           CidrIp: 0.0.0.0/0
 
   # ── CloudWatch Log Group ──
@@ -264,14 +264,13 @@ Resources:
     Properties:
       Name: !Ref ProjectName
       Scheme: internet-facing
-      LoadBalancerType: application
+      Type: application
       SecurityGroups: [!Ref DqcAlbSecurityGroup]
       Subnets: !Ref SubnetIds
 
   DqcTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      TargetGroupType: ip
       TargetType: ip
       Name: !Sub "${ProjectName}-tg"
       Port: 80
@@ -296,10 +295,10 @@ Resources:
       Family: !Ref ProjectName
       NetworkMode: awsvpc
       RequiresCompatibilities: [FARGATE]
-      Cpu: !Ref CPUC_units
+      Cpu: !Ref TaskCpu
       Memory: !Ref MemoryMiB
-      ExecutionRoleArn: !Ref EcsExecRole
-      TaskRoleArn: !Ref EcsTaskRole
+      ExecutionRoleArn: !GetAtt EcsExecRole.Arn
+      TaskRoleArn: !GetAtt EcsTaskRole.Arn
       ContainerDefinitions:
         - Name: api
           Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/${ProjectName}-api:latest"
@@ -345,7 +344,6 @@ Resources:
     Type: AWS::ECS::Service
     DependsOn:
       - DqcListener
-      - DqcTargetGroup
     Properties:
       ServiceName: !Ref ProjectName
       Cluster: !Ref DqcEcsCluster
@@ -409,6 +407,14 @@ Outputs:
   DqcStoreTableArn:
     Value: !GetAtt DqcStoreTable.Arn
     Export: { Name: !Sub "${ProjectName}-DqcStoreTableArn" }
+
+  DqcStoreStreamArn:
+    Value: !GetAtt DqcStoreTable.StreamArn
+    Export: { Name: !Sub "${ProjectName}-DqcStoreStreamArn" }
+
+  S3BucketArn:
+    Value: !GetAtt DqcDataBucket.Arn
+    Export: { Name: !Sub "${ProjectName}-S3BucketArn" }
 
   DqcApiUri:
     Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/${ProjectName}-api"

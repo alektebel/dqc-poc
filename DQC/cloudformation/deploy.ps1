@@ -21,7 +21,10 @@
 .EXAMPLE
     .\deploy.ps1 -Region eu-west-1 -StackName dqc-poc
     .\deploy.ps1 -Destroy -Confirm
-    .\deploy.ps1 -Region us-east-1 -StackName my-dqc -VpcId vpc-xxxx
+    .\deploy.ps1 -Region eu-west-1 -StackName my-dqc -VpcId vpc-xxxx -SubnetIds subnet-aaaa,subnet-bbbb
+
+    Requires an EXISTING VPC with 2+ subnets in different AZs. This script
+    never creates networking.
 #>
 [CmdletBinding()]
 param(
@@ -65,24 +68,6 @@ function Test-AwsCredentials {
     }
 }
 
-function Find-Zip {
-    # Try to find a zip executable (Git Bash ships with it on Windows)
-    $candidates = @("zip", "C:\Program Files\Git\usr\bin\zip.exe",
-                     "C:\Program Files\7-Zip\7z.exe")
-    foreach ($c in $candidates) {
-        if (Test-Path $c) { return $c }
-    }
-    Write-Host "`nERROR: 'zip' not found. Install it via:" -ForegroundColor Red
-    Write-Host "  - Git Bash ships zip at: C:\Program Files\Git\usr\bin\zip.exe" -ForegroundColor Yellow
-    Write-Host "  - Or install 7-Zip and use '7z a'" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "Alternatively, build layers manually:" -ForegroundColor Yellow
-    Write-Host "  pip install -r requirements.txt -t .\python\" -ForegroundColor Yellow
-    Write-Host "  zip -r layer.zip python\\" -ForegroundColor Yellow
-    throw "zip not found"
-}
-
-$zip = Find-Zip
 
 # Detect script directory (works in PS5 and PS7)
 $PSScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path $MyInvocation.MyCommand.Path -Parent }
@@ -111,9 +96,9 @@ try {
 Write-Host "    Account: $($account.PadRight(12))  Region: $($Region.PadRight(12))  Stack: $($StackName)"
 Write-Host ""
 
-# ── VPC detection ─────────────────────────────────────────────────────
+# ── VPC / subnet resolution (never creates networking) ────────────────
 if (-not $Destroy) {
-    Write-Step "Detecting VPC and subnets..."
+    Write-Step "Resolving VPC and subnets..."
 
     if (-not $VpcId) {
         try {
@@ -122,38 +107,71 @@ if (-not $Destroy) {
                 --filters "Name=isDefault,Values=true" `
                 --query 'Vpcs[0].VpcId' --output text 2>$null
         } catch { $VpcId = "" }
-
-        if (-not $VpcId -or $VpcId -eq "None") {
-            Write-Host "    No default VPC found. Attempting to create one..."
-            try {
-                $VpcId = aws ec2 create-default-vpc --query 'Vpc.VpcId' --output text --region $Region 2>$null
-            } catch { $VpcId = "" }
-            if (-not $VpcId -or $VpcId -eq "None") {
-                Write-Host "ERROR: Could not create default VPC. Provide VPC and subnet IDs manually:" -ForegroundColor Red
-                Write-Host "  .\deploy.ps1 -VpcId vpc-xxx -SubnetIds subnet-xxx,subnet-yyy" -ForegroundColor Red
-                exit 1
-            }
-            Write-Host "    Created VPC: $($VpcId)"
-        }
     }
 
-    # Get subnets in the VPC
-    try {
-        $subnetOutput = aws ec2 describe-subnets `
-            --region $Region `
-            --filters "Name=vpc-id,Values=$VpcId" `
-            --query 'Subnets[*].SubnetId' --output text 2>$null
-        $subnets = $subnetOutput -replace "`t", "," -split "," | Where-Object { $_ -and $_ -ne "None" }
-    } catch { $subnets = @() }
-
-    if ($subnets.Count -eq 0) {
-        Write-Host "ERROR: No subnets found in VPC $($VpcId)" -ForegroundColor Red
+    if (-not $VpcId -or $VpcId -eq "None") {
+        Write-Host ""
+        Write-Host "ERROR: No VPC specified and no default VPC found in $($Region)." -ForegroundColor Red
+        Write-Host "       This script does NOT create a VPC. Pass an existing one:" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "         .\deploy.ps1 -Region $Region -StackName $StackName ``" -ForegroundColor Yellow
+        Write-Host "            -VpcId vpc-xxxxxxxx -SubnetIds subnet-aaaa,subnet-bbbb" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "       VPCs visible to this identity in $($Region):" -ForegroundColor Red
+        aws ec2 describe-vpcs --region $Region `
+            --query 'Vpcs[].[VpcId,CidrBlock,Tags[?Key==`Name`]|[0].Value]' `
+            --output table 2>$null
         exit 1
     }
 
-    $SubnetIds = ($subnets -join ",")
-    Write-Host "    VPC:     $($VpcId)"
+    if (-not $SubnetIds) {
+        # One subnet per AZ, so the ALB gets the 2+ AZs it requires.
+        try {
+            $subnetRows = aws ec2 describe-subnets `
+                --region $Region `
+                --filters "Name=vpc-id,Values=$VpcId" `
+                --query 'Subnets[].[AvailabilityZone,SubnetId]' --output text 2>$null
+            $pairs = @($subnetRows -split "`n" | Where-Object { $_.Trim() } | ForEach-Object {
+                $parts = $_ -split "`t"
+                [PSCustomObject]@{ AZ = $parts[0]; SubnetId = $parts[1] }
+            })
+            $subnets = @($pairs | Group-Object AZ | ForEach-Object { $_.Group[0].SubnetId })
+        } catch { $subnets = @() }
+
+        if ($subnets.Count -eq 0) {
+            Write-Host "ERROR: No subnets found in VPC $($VpcId) (region $($Region))." -ForegroundColor Red
+            Write-Host "       Pass them explicitly with -SubnetIds subnet-aaaa,subnet-bbbb" -ForegroundColor Red
+            exit 1
+        }
+        $SubnetIds = ($subnets -join ",")
+    }
+
+    $SubnetIds = $SubnetIds -replace "\s", ""
+
+    # Validate the subnets really are in this VPC and span 2+ AZs (ALB requirement).
+    $azList = @()
+    try {
+        $azRaw = aws ec2 describe-subnets `
+            --region $Region `
+            --subnet-ids ($SubnetIds -split ",") `
+            --query "Subnets[?VpcId=='$VpcId'].AvailabilityZone" --output text 2>$null
+        $azList = @($azRaw -split "[`t`n ]" | Where-Object { $_ } | Select-Object -Unique)
+    } catch { $azList = @() }
+
+    if ($azList.Count -lt 2) {
+        Write-Host "ERROR: The Application Load Balancer needs subnets in at least 2 AZs." -ForegroundColor Red
+        Write-Host "       VPC $($VpcId) resolved to: $($SubnetIds) ($($azList.Count) AZ)." -ForegroundColor Red
+        Write-Host "       Subnets in $($VpcId):" -ForegroundColor Red
+        aws ec2 describe-subnets --region $Region `
+            --filters "Name=vpc-id,Values=$VpcId" `
+            --query 'Subnets[].[SubnetId,AvailabilityZone,CidrBlock,MapPublicIpOnLaunch]' `
+            --output table 2>$null
+        exit 1
+    }
+
+    Write-Host "    VPC:     $($VpcId) (existing, not created by this script)"
     Write-Host "    Subnets: $($SubnetIds)"
+    Write-Host "    AZs:     $($azList.Count)"
     Write-Host ""
 }
 
@@ -186,7 +204,20 @@ if ($Destroy) {
 }
 
 # ── Stage 0: Build Lambda Layer ───────────────────────────────────────
+# Wheels must match the Lambda runtime (python3.12, x86_64 manylinux), not the
+# local interpreter, or native deps like pydantic-core fail to import at runtime.
 Write-Step "Building Lambda layer (LangChain + Bedrock)..."
+
+$buildDir = Join-Path $PSScriptDir ".build"
+$pipLambdaArgs = @(
+    "--platform", "manylinux2014_x86_64",
+    "--implementation", "cp",
+    "--python-version", "3.12",
+    "--only-binary=:all:",
+    "--upgrade"
+)
+
+if (Test-Path $buildDir) { Remove-Item $buildDir -Recurse -Force }
 
 $layerDir = Join-Path $PSScriptDir "lambda-layers\langchain-layer"
 if (-not (Test-Path $layerDir)) {
@@ -194,62 +225,37 @@ if (-not (Test-Path $layerDir)) {
     exit 1
 }
 
-# Create a temp venv in the layer dir (Windows doesn't have /tmp)
-$venvPath = Join-Path $layerDir ".layer-venv"
-python -m venv $venvPath 2>$null
+$layerTarget = Join-Path $buildDir "lambda-layers\langchain-layer\python"
+New-Item -ItemType Directory -Force -Path $layerTarget | Out-Null
+python -m pip install -r (Join-Path $layerDir "requirements.txt") -t $layerTarget @pipLambdaArgs --quiet
+Write-Host "    Layer built at .build\lambda-layers\langchain-layer\python"
 
-# Install dependencies into python/ subdirectory
-$targetPath = Join-Path $layerDir "python"
-& $venvPath\Scripts\pip install -r (Join-Path $layerDir "requirements.txt") -t $targetPath 2>$null
-
-if (Test-Path $venvPath) { Remove-Item $venvPath -Recurse -Force }
-
-# Build ZIP
-if (Test-Path (Join-Path $layerDir "layer.zip")) {
-    Remove-Item (Join-Path $layerDir "layer.zip") -Force
-}
-
-# Use zip command (Git Bash)
-if ($zip -match "7z") {
-    & $zip a (Join-Path $layerDir "layer.zip") (Join-Path $layerDir "python") -r 2>$null
-} else {
-    # Git Bash zip: need to zip from the directory containing python/
-    Push-Location $layerDir
-    & $zip -r layer.zip python 2>$null
-    Pop-Location
-}
-Write-Host "    Layer ZIP created: layer.zip"
-
-# ── Stage 0b: Package Lambda functions ─────────────────────────────────
+# ── Stage 0b: Build Lambda function bundles ────────────────────────────
+# `aws cloudformation package` zips each of these directories, so handler.py and
+# any function-specific deps are staged together under .build\.
 $funcDirs = @("find-fields", "sql-generator", "bcbs-classifier")
 
 foreach ($funcDir in $funcDirs) {
-    Write-Step "Packaging Lambda: $funcDir..."
+    Write-Step "Building Lambda: $funcDir..."
     $funcPath = Join-Path $PSScriptDir "lambda-functions" $funcDir
     if (-not (Test-Path $funcPath)) {
         Write-Host "    WARNING: Directory not found: $funcPath — skipping." -ForegroundColor Yellow
         continue
     }
 
-    # Package requirements if present
-    if (Test-Path (Join-Path $funcPath "requirements.txt")) {
-        $venvPath = Join-Path $funcPath ".lambda-venv"
-        python -m venv $venvPath 2>$null
-        $targetPath = Join-Path $funcPath "package"
-        & $venvPath\Scripts\pip install -r (Join-Path $funcPath "requirements.txt") -t $targetPath 2>$null
-
-        if (Test-Path $venvPath) { Remove-Item $venvPath -Recurse -Force }
-
-        if (Test-Path (Join-Path $funcPath "package.zip")) {
-            Remove-Item (Join-Path $funcPath "package.zip") -Force
-        }
-
-        Push-Location $funcPath
-        & $zip -r package.zip . -x *.pyc -x __pycache__\\* -x *.zip 2>$null
-        Pop-Location
+    $funcTarget = Join-Path $buildDir "lambda-functions\$funcDir"
+    New-Item -ItemType Directory -Force -Path $funcTarget | Out-Null
+    Get-ChildItem $funcPath -Filter "*.py" -File | ForEach-Object {
+        Copy-Item $_.FullName -Destination $funcTarget -Force
     }
 
-    Write-Host "    $funcDir packaged."
+    # Blank/comment-only requirements mean "everything comes from the layer".
+    $reqFile = Join-Path $funcPath "requirements.txt"
+    if ((Test-Path $reqFile) -and (Get-Content $reqFile | Where-Object { $_ -match '^\s*[^#\s]' })) {
+        python -m pip install -r $reqFile -t $funcTarget @pipLambdaArgs --quiet
+    }
+
+    Write-Host "    $funcDir staged."
 }
 
 Write-Host ""
@@ -269,7 +275,7 @@ $infraArgs = @(
         "VpcId=$VpcId",
         "SubnetIds=$SubnetIds",
         "BedrockModelId=eu.amazon.nova-micro-v1:0",
-        "CPUC_units=1024",
+        "TaskCpu=1024",
         "MemoryMiB=4096",
     "--capabilities", "CAPABILITY_IAM", "CAPABILITY_NAMED_IAM",
     "--no-fail-on-empty-changeset",
@@ -284,11 +290,37 @@ Write-Host ""
 # ── Stage 2: Deploy Serverless ─────────────────────────────────────────
 Write-Block "Stage 2: Deploying Serverless (Lambda + API Gateway)"
 
+# The Lambda code and layer live on disk, so the template has to be packaged
+# (artifacts uploaded to S3, local paths rewritten) before it can be deployed.
+$artifactBucket = aws cloudformation describe-stacks `
+    --stack-name "$StackName-infrastructure" `
+    --region $Region `
+    --query "Stacks[0].Outputs[?OutputKey=='S3BucketName'].OutputValue" `
+    --output text 2>$null
+
+if (-not $artifactBucket -or $artifactBucket -eq "None") {
+    Write-Host "ERROR: Could not read S3BucketName from the $StackName-infrastructure stack." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "    Packaging artifacts to s3://$artifactBucket/lambda-artifacts/"
+
 $slTemplate = Join-Path $PSScriptDir "dqc-serverless.yaml"
+$packagedTemplate = Join-Path $PSScriptDir ".dqc-serverless.packaged.yaml"
+
+Invoke-Aws -Args @(
+    "cloudformation", "package",
+    "--template-file", "`"$slTemplate`"",
+    "--s3-bucket", $artifactBucket,
+    "--s3-prefix", "lambda-artifacts",
+    "--output-template-file", "`"$packagedTemplate`"",
+    "--region", $Region
+)
+
 $slArgs = @(
     "cloudformation", "deploy",
     "--stack-name", "$StackName-serverless",
-    "--template-file", "`"$slTemplate`"",
+    "--template-file", "`"$packagedTemplate`"",
     "--region", $Region,
     "--parameter-overrides",
         "ProjectName=$StackName",
@@ -308,10 +340,9 @@ Write-Host ""
 # ── Upload data to S3 ──────────────────────────────────────────────────
 Write-Block "Uploading Data to S3"
 
-$s3Bucket = "$StackName-data-$account"
+# Created by the infrastructure stack (Issue #6) — do not re-create it here.
+$s3Bucket = $artifactBucket
 Write-Host "    S3 bucket: $s3Bucket"
-
-aws s3 mb "s3://$s3Bucket" --region $Region 2>$null
 
 # Upload prompts
 Write-Host "    Uploading prompts..."

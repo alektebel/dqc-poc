@@ -60,21 +60,48 @@ DQC/cloudformation/
 1. AWS CLI configured (`aws configure` or `aws configure sso`)
 2. Python 3.11+ (for Lambda layer builds)
 3. IAM permissions to create: ECS, ECR, Lambda, API Gateway, DynamoDB, S3, IAM roles
+4. **An existing VPC with at least two subnets in different AZs.** Neither the
+   templates nor `deploy.sh` create networking — no VPC, subnets, IGW or NAT.
+   The ALB requires 2+ AZs, so a single-subnet VPC is rejected up front.
+5. **Bedrock model access** for Amazon Nova Micro *and* Nova Pro, enabled in the
+   target region (console → Bedrock → Model access). Without it every Lambda
+   fails with `AccessDeniedException`. The default model ids are the EU
+   inference profiles (`eu.amazon.nova-*`), so the region must be an EU one.
 
 ### Quick Start
 
 ```bash
 cd DQC/cloudformation
-
-# Deploy everything (infrastructure + serverless + data upload)
 chmod +x deploy.sh
-./deploy.sh --region eu-west-1 --stack-name dqc-poc
 
-# For a custom VPC/subnet (corporate environment):
+# Corporate environment — pass the VPC and subnets you were given:
 ./deploy.sh --region eu-west-1 --stack-name dqc-poc \
   --vpc-id vpc-xxxxxxxxxxxxxxxxx \
   --subnet-ids subnet-xxxx,subnet-yyyy
+
+# If (and only if) the account has a default VPC, they can be omitted and the
+# script will pick one subnet per AZ from it:
+./deploy.sh --region eu-west-1 --stack-name dqc-poc
 ```
+
+`--vpc-id` / `--subnet-ids` are also readable from the `VPC_ID` / `SUBNET_IDS`
+environment variables. Windows: `deploy.ps1 -VpcId ... -SubnetIds ...`.
+
+If no VPC is resolved, the script **exits** and prints the VPCs visible to your
+identity — it never calls `ec2:CreateDefaultVpc`.
+
+### What the deploy does
+
+| Stage | Action |
+|---|---|
+| 0 | Builds the LangChain layer and each function bundle into `.build/`, using `manylinux2014_x86_64` / cp312 wheels so native deps match the Lambda runtime |
+| 1 | `aws cloudformation deploy` of `dqc-infrastructure.yaml` into the VPC you passed |
+| 2 | `aws cloudformation package` (uploads `.build/` artifacts to the stack's S3 bucket, rewrites the local paths) then `deploy` of `dqc-serverless.yaml` |
+| 3 | Syncs `data/prompts`, `data/rules` and `data/anonymized` to that same bucket |
+
+Stage 2 must run `package` first: the templates reference local directories, and
+plain `deploy` cannot upload them. The built layer is ~59 MB zipped, which is
+over the 50 MB direct-upload limit and precisely why it goes via S3.
 
 ### Destroy
 
@@ -201,6 +228,11 @@ Update the values with the CloudFormation outputs, then use the API Gateway URLs
 
 ## Troubleshooting
 
+### Lambda layer size
+The layer is ~177 MB unzipped (numpy and botocore dominate). Lambda's hard limit
+is 250 MB unzipped for the function plus all its layers, so there is headroom but
+not a lot — check before adding dependencies.
+
 ### Lambda cold starts
 Lambda functions use LangChain which can cause 30-60s cold starts. Use provisioned concurrency or expect initial latency.
 
@@ -211,7 +243,9 @@ Enable Amazon Nova Micro/Pro in Bedrock → Model Access in the AWS console.
 The stack requires `CAPABILITY_IAM` and `CAPABILITY_NAMED_IAM` — this is normal for CloudFormation that creates IAM roles.
 
 ### VPC/subnet issues
-If you don't have a default VPC, the deploy script will create one automatically.
+The deploy script never creates networking. Pass `--vpc-id` and `--subnet-ids`
+explicitly. The subnets must be in the given VPC and span at least two AZs, or
+the ALB cannot be created — the script checks this before touching CloudFormation.
 
 ### Lambda timeout
 Increase timeout in the CloudFormation template (`Timeout: 900` is 15 minutes — sufficient for Bedrock calls).

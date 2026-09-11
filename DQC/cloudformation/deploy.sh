@@ -15,11 +15,15 @@
 #   #10 — DynamoDB to store DQCs by project
 #
 # Usage:
-#   ./deploy.sh [--region eu-west-1] [--stack-name dqc-poc] [--destroy] [--confirm]
+#   ./deploy.sh [--region eu-west-1] [--stack-name dqc-poc] \
+#              [--vpc-id vpc-xxx] [--subnet-ids subnet-a,subnet-b] [--destroy] [--confirm]
 #
 # Prerequisites:
 #   - AWS CLI configured (aws configure or SSO)
 #   - Python 3.11+ (for Lambda layer builds)
+#   - An EXISTING VPC with at least two subnets in different AZs. This script
+#     never creates networking; pass --vpc-id/--subnet-ids if there is no
+#     default VPC, or if you want to target specific subnets.
 
 set -euo pipefail
 
@@ -28,6 +32,8 @@ STACK_NAME="${STACK_NAME:-dqc-poc}"
 AWS_REGION="${AWS_REGION:-eu-west-1}"
 CONFIRM="${CONFIRM:-false}"
 DESTROY="${DESTROY:-false}"
+VPC_ID="${VPC_ID:-}"
+SUBNET_CSV="${SUBNET_IDS:-}"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -40,6 +46,14 @@ while [[ $# -gt 0 ]]; do
       STACK_NAME="$2"
       shift 2
       ;;
+    --vpc-id)
+      VPC_ID="$2"
+      shift 2
+      ;;
+    --subnet-ids)
+      SUBNET_CSV="$2"
+      shift 2
+      ;;
     --destroy)
       DESTROY=true
       shift
@@ -49,14 +63,20 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--region eu-west-1] [--stack-name dqc-poc] [--destroy] [--confirm]"
+      echo "Usage: $0 [--region eu-west-1] [--stack-name dqc-poc] \\"
+      echo "          [--vpc-id vpc-xxx] [--subnet-ids subnet-a,subnet-b] [--destroy] [--confirm]"
       echo ""
       echo "Options:"
       echo "  --region       AWS region (default: eu-west-1)"
       echo "  --stack-name   CloudFormation stack name (default: dqc-poc)"
+      echo "  --vpc-id       Existing VPC to deploy into (default: the account default VPC)"
+      echo "  --subnet-ids   Comma-separated subnets, 2+ in different AZs (default: all in the VPC)"
       echo "  --destroy      Destroy the stack instead of deploying"
       echo "  --confirm      Skip confirmation prompt"
       echo "  -h, --help     Show this help"
+      echo ""
+      echo "This script never creates a VPC. If the account has no default VPC,"
+      echo "pass --vpc-id and --subnet-ids explicitly."
       exit 0
       ;;
     *)
@@ -83,39 +103,70 @@ echo "    Region:  ${AWS_REGION}"
 echo "    Stack:   ${STACK_NAME}"
 echo ""
 
-# ── VPC detection ──────────────────────────────────────────────────────
-echo "==> Detecting VPC and subnets..."
+# ── VPC / subnet resolution (never creates networking) ─────────────────
+echo "==> Resolving VPC and subnets..."
 
-VPC_ID=$(aws ec2 describe-vpcs \
-  --region "${AWS_REGION}" \
-  --filters "Name=isDefault,Values=true" \
-  --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "")
-
-if [[ "${VPC_ID}" == "None" ]] || [[ -z "${VPC_ID}" ]]; then
-  echo "    No default VPC found. Creating default VPC..."
-  VPC_ID=$(aws ec2 create-default-vpc --query 'Vpc.VpcId' --output text --region "${AWS_REGION}" 2>/dev/null || echo "")
-  if [[ "${VPC_ID}" == "None" ]] || [[ -z "${VPC_ID}" ]]; then
-    echo "    ERROR: Could not create default VPC. Please provide VPC and subnet IDs manually."
-    echo "    Use: --stack-name ${STACK_NAME} --vpc-id vpc-xxx --subnet-ids subnet-xxx,subnet-yyy"
-    exit 1
-  fi
-  echo "    Created VPC: ${VPC_ID}"
+if [[ -z "${VPC_ID}" ]]; then
+  VPC_ID=$(aws ec2 describe-vpcs \
+    --region "${AWS_REGION}" \
+    --filters "Name=isDefault,Values=true" \
+    --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "")
 fi
 
-SUBNET_IDS=$(aws ec2 describe-subnets \
-  --region "${AWS_REGION}" \
-  --filters "Name=vpc-id,Values=${VPC_ID}" \
-  --query 'Subnets[*].SubnetId' --output text)
-
-SUBNET_CSV=$(echo "${SUBNET_IDS}" | tr '\t' ',')
-
-if [[ -z "${SUBNET_CSV}" ]] || [[ "${SUBNET_CSV}" == "None" ]]; then
-  echo "ERROR: No subnets found in VPC ${VPC_ID}"
+if [[ -z "${VPC_ID}" ]] || [[ "${VPC_ID}" == "None" ]]; then
+  echo ""
+  echo "ERROR: No VPC specified and no default VPC found in ${AWS_REGION}."
+  echo "       This script does NOT create a VPC. Pass an existing one:"
+  echo ""
+  echo "         $0 --region ${AWS_REGION} --stack-name ${STACK_NAME} \\"
+  echo "            --vpc-id vpc-xxxxxxxx --subnet-ids subnet-aaaa,subnet-bbbb"
+  echo ""
+  echo "       VPCs visible to this identity in ${AWS_REGION}:"
+  aws ec2 describe-vpcs --region "${AWS_REGION}" \
+    --query 'Vpcs[].[VpcId,CidrBlock,Tags[?Key==`Name`]|[0].Value]' \
+    --output table 2>/dev/null || echo "       (ec2:DescribeVpcs denied)"
   exit 1
 fi
 
-echo "    VPC: ${VPC_ID}"
+if [[ -z "${SUBNET_CSV}" ]]; then
+  # One subnet per AZ, so the ALB gets the 2+ AZs it requires.
+  SUBNET_CSV=$(aws ec2 describe-subnets \
+    --region "${AWS_REGION}" \
+    --filters "Name=vpc-id,Values=${VPC_ID}" \
+    --query 'Subnets[].[AvailabilityZone,SubnetId]' --output text 2>/dev/null \
+    | sort -u -k1,1 | awk '{print $2}' | paste -sd, -)
+fi
+
+SUBNET_CSV="${SUBNET_CSV// /}"
+
+if [[ -z "${SUBNET_CSV}" ]] || [[ "${SUBNET_CSV}" == "None" ]]; then
+  echo "ERROR: No subnets found in VPC ${VPC_ID} (region ${AWS_REGION})."
+  echo "       Pass them explicitly with --subnet-ids subnet-aaaa,subnet-bbbb"
+  exit 1
+fi
+
+# Validate the subnets really are in this VPC and span 2+ AZs (ALB requirement).
+SUBNET_AZS=$(aws ec2 describe-subnets \
+  --region "${AWS_REGION}" \
+  --subnet-ids ${SUBNET_CSV//,/ } \
+  --query "Subnets[?VpcId=='${VPC_ID}'].AvailabilityZone" --output text 2>/dev/null || echo "")
+
+AZ_COUNT=$(echo "${SUBNET_AZS}" | tr '\t' '\n' | sort -u | grep -c . || true)
+
+if [[ "${AZ_COUNT}" -lt 2 ]]; then
+  echo "ERROR: The Application Load Balancer needs subnets in at least 2 AZs."
+  echo "       VPC ${VPC_ID} resolved to: ${SUBNET_CSV} (${AZ_COUNT} AZ)."
+  echo "       Subnets in ${VPC_ID}:"
+  aws ec2 describe-subnets --region "${AWS_REGION}" \
+    --filters "Name=vpc-id,Values=${VPC_ID}" \
+    --query 'Subnets[].[SubnetId,AvailabilityZone,CidrBlock,MapPublicIpOnLaunch]' \
+    --output table 2>/dev/null || true
+  exit 1
+fi
+
+echo "    VPC:     ${VPC_ID} (existing, not created by this script)"
 echo "    Subnets: ${SUBNET_CSV}"
+echo "    AZs:     ${AZ_COUNT}"
 echo ""
 
 # ── Deploy / Destroy ───────────────────────────────────────────────────
@@ -161,40 +212,44 @@ if [[ "${DESTROY}" == "true" ]]; then
 fi
 
 # ── Stage 0: Build Lambda layer ────────────────────────────────────────
-echo "==> Building Lambda layer (LangChain + Bedrock)..."
-cd "${SCRIPT_DIR}/lambda-layers/langchain-layer"
-python3 -m venv /tmp/langchain-layer-venv
-source /tmp/langchain-layer-venv/bin/activate
-pip install -r requirements.txt --target ./python/ --quiet 2>/dev/null
-deactivate
-rm -rf /tmp/langchain-layer-venv
+# Wheels must match the Lambda runtime (python3.12, x86_64 manylinux), not the
+# local interpreter, or native deps like pydantic-core fail to import at runtime.
+BUILD_DIR="${SCRIPT_DIR}/.build"
+PIP_LAMBDA_ARGS=(
+  --platform manylinux2014_x86_64
+  --implementation cp
+  --python-version 3.12
+  --only-binary=:all:
+  --upgrade
+)
 
-if [[ -f layer.zip ]]; then
-  rm layer.zip
-fi
-zip -r layer.zip python/ > /dev/null 2>&1
-echo "    Layer ZIP created: layer.zip"
+rm -rf "${BUILD_DIR}"
+mkdir -p "${BUILD_DIR}/lambda-layers/langchain-layer"
+
+echo "==> Building Lambda layer (LangChain + Bedrock)..."
+python3 -m pip install -r "${SCRIPT_DIR}/lambda-layers/langchain-layer/requirements.txt" \
+  --target "${BUILD_DIR}/lambda-layers/langchain-layer/python" "${PIP_LAMBDA_ARGS[@]}" --quiet
+echo "    Layer built at .build/lambda-layers/langchain-layer/python"
 echo ""
 
-# ── Stage 0b: Package Lambda functions ─────────────────────────────────
+# ── Stage 0b: Build Lambda function bundles ────────────────────────────
+# `aws cloudformation package` zips each of these directories, so handler.py and
+# any function-specific deps are staged together under .build/.
 for func_dir in find-fields sql-generator bcbs-classifier; do
-  echo "==> Packaging Lambda: ${func_dir}..."
-  cd "${SCRIPT_DIR}/lambda-functions/${func_dir}"
+  echo "==> Building Lambda: ${func_dir}..."
+  SRC="${SCRIPT_DIR}/lambda-functions/${func_dir}"
+  DEST="${BUILD_DIR}/lambda-functions/${func_dir}"
+  mkdir -p "${DEST}"
 
-  if [[ -f requirements.txt ]]; then
-    python3 -m venv /tmp/lambda-venv
-    source /tmp/lambda-venv/bin/activate
-    pip install -r requirements.txt --target ./package/ --quiet 2>/dev/null
-    deactivate
-    rm -rf /tmp/lambda-venv
+  find "${SRC}" -maxdepth 1 -name '*.py' -exec cp {} "${DEST}/" \;
 
-    if [[ -f package.zip ]]; then
-      rm package.zip
-    fi
-    zip -r package.zip . -x "*.pyc" -x "__pycache__/*" > /dev/null 2>&1
+  # Blank/comment-only requirements mean "everything comes from the layer".
+  if [[ -f "${SRC}/requirements.txt" ]] && grep -qE '^[[:space:]]*[^#[:space:]]' "${SRC}/requirements.txt"; then
+    python3 -m pip install -r "${SRC}/requirements.txt" \
+      --target "${DEST}" "${PIP_LAMBDA_ARGS[@]}" --quiet
   fi
 
-  echo "    ${func_dir} packaged."
+  echo "    ${func_dir} staged."
 done
 
 cd "${SCRIPT_DIR}"
@@ -204,25 +259,21 @@ echo ""
 echo "=== Stage 1: Deploying Infrastructure ==="
 echo ""
 
-DEPLOY_INFRA_CMD="aws cloudformation deploy \
-  --stack-name '${STACK_NAME}-infrastructure' \
-  --template-file '${SCRIPT_DIR}/dqc-infrastructure.yaml' \
-  --region '${AWS_REGION}' \
+aws cloudformation deploy \
+  --stack-name "${STACK_NAME}-infrastructure" \
+  --template-file "${SCRIPT_DIR}/dqc-infrastructure.yaml" \
+  --region "${AWS_REGION}" \
   --parameter-overrides \
-    ProjectName=${STACK_NAME} \
-    AWSRegion=${AWS_REGION} \
-    VpcId=${VPC_ID} \
-    SubnetIds=${SUBNET_CSV} \
+    ProjectName="${STACK_NAME}" \
+    AWSRegion="${AWS_REGION}" \
+    VpcId="${VPC_ID}" \
+    SubnetIds="${SUBNET_CSV}" \
     BedrockModelId=eu.amazon.nova-micro-v1:0 \
-    CPUC_units=1024 \
+    TaskCpu=1024 \
     MemoryMiB=4096 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset \
-  --tags 'Project=dqc-poc' 'ManagedBy=cloudformation' 'Stage=infrastructure'"
-
-echo "${DEPLOY_INFRA_CMD}"
-echo ""
-eval "${DEPLOY_INFRA_CMD}"
+  --tags Project=dqc-poc ManagedBy=cloudformation Stage=infrastructure
 
 echo ""
 
@@ -230,22 +281,41 @@ echo ""
 echo "=== Stage 2: Deploying Serverless (Lambda + API Gateway) ==="
 echo ""
 
-DEPLOY_SERVERLESS_CMD="aws cloudformation deploy \
-  --stack-name '${STACK_NAME}-serverless' \
-  --template-file '${SCRIPT_DIR}/dqc-serverless.yaml' \
-  --region '${AWS_REGION}' \
+# The Lambda code and layer live on disk, so the template has to be packaged
+# (artifacts uploaded to S3, local paths rewritten) before it can be deployed.
+ARTIFACT_BUCKET=$(aws cloudformation describe-stacks \
+  --stack-name "${STACK_NAME}-infrastructure" \
+  --region "${AWS_REGION}" \
+  --query "Stacks[0].Outputs[?OutputKey=='S3BucketName'].OutputValue" \
+  --output text)
+
+if [[ -z "${ARTIFACT_BUCKET}" ]] || [[ "${ARTIFACT_BUCKET}" == "None" ]]; then
+  echo "ERROR: Could not read S3BucketName from the ${STACK_NAME}-infrastructure stack."
+  exit 1
+fi
+
+echo "    Packaging artifacts to s3://${ARTIFACT_BUCKET}/lambda-artifacts/"
+PACKAGED_TEMPLATE="${SCRIPT_DIR}/.dqc-serverless.packaged.yaml"
+
+aws cloudformation package \
+  --template-file "${SCRIPT_DIR}/dqc-serverless.yaml" \
+  --s3-bucket "${ARTIFACT_BUCKET}" \
+  --s3-prefix lambda-artifacts \
+  --output-template-file "${PACKAGED_TEMPLATE}" \
+  --region "${AWS_REGION}"
+
+aws cloudformation deploy \
+  --stack-name "${STACK_NAME}-serverless" \
+  --template-file "${PACKAGED_TEMPLATE}" \
+  --region "${AWS_REGION}" \
   --parameter-overrides \
-    ProjectName=${STACK_NAME} \
-    AWSRegion=${AWS_REGION} \
+    ProjectName="${STACK_NAME}" \
+    AWSRegion="${AWS_REGION}" \
     BedrockModelId=eu.amazon.nova-micro-v1:0 \
     JudgeBedrockModelId=eu.amazon.nova-pro-v1:0 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset \
-  --tags 'Project=dqc-poc' 'ManagedBy=cloudformation' 'Stage=serverless'"
-
-echo "${DEPLOY_SERVERLESS_CMD}"
-echo ""
-eval "${DEPLOY_SERVERLESS_CMD}"
+  --tags Project=dqc-poc ManagedBy=cloudformation Stage=serverless
 
 echo ""
 
@@ -253,11 +323,9 @@ echo ""
 echo "=== Uploading Data to S3 ==="
 echo ""
 
-S3_BUCKET="${STACK_NAME}-data-${ACCOUNT_ID}"
+# Created by the infrastructure stack (Issue #6) — do not re-create it here.
+S3_BUCKET="${ARTIFACT_BUCKET}"
 echo "    S3 bucket: ${S3_BUCKET}"
-
-# Create bucket
-aws s3 mb "s3://${S3_BUCKET}" --region "${AWS_REGION}" 2>/dev/null || true
 
 # Upload prompts
 echo "    Uploading prompts..."

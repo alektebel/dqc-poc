@@ -1,9 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: DQC PoC — Serverless layer (Lambda functions, API Gateway).
-  Issue #7: Lambda to find implicated fields (LangChain + Bedrock).
-  Issue #9: Lambda to generate SQL with retry loop + LLM-as-judge.
-  Issue #2: Lambda to classify DQCs by BCBS 239 dimensions.
-  Issues #4, #5: API Gateway for Bedrock integration.
+Description: >-
+  DQC PoC — Serverless layer (Lambda functions, API Gateway).
+  Issue #7 - Lambda to find implicated fields (LangChain + Bedrock).
+  Issue #9 - Lambda to generate SQL with retry loop + LLM-as-judge.
+  Issue #2 - Lambda to classify DQCs by BCBS 239 dimensions.
+  Issues #4, #5 - API Gateway for Bedrock integration.
 
 Parameters:
   ProjectName:
@@ -46,12 +47,14 @@ Resources:
               - Effect: Allow
                 Action:
                   [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query, dynamodb:Scan]
-                Resource: !ImportValue !Sub "${ProjectName}-DqcStoreTableArn"
+                Resource: { "Fn::ImportValue": !Sub "${ProjectName}-DqcStoreTableArn" }
               - Effect: Allow
                 Action: [s3:GetObject, s3:ListBucket]
                 Resource:
-                  - !ImportValue !Sub "${ProjectName}-S3BucketArn"
-                  - !Sub [ "arn:aws:s3:::${BucketName}/*", BucketName: !ImportValue !Sub "${ProjectName}-S3BucketName" ]
+                  - { "Fn::ImportValue": !Sub "${ProjectName}-S3BucketArn" }
+                  - !Sub
+                    - "${BucketArn}/*"
+                    - BucketArn: { "Fn::ImportValue": !Sub "${ProjectName}-S3BucketArn" }
       Tags: [{ Key: Project, Value: !Ref ProjectName }]
 
   # ── Lambda Layer: LangChain + Bedrock ──
@@ -61,7 +64,7 @@ Resources:
       LayerName: !Sub "${ProjectName}-langchain-layer"
       Description: LangChain + Bedrock Python layer for DQC Lambda functions
       CompatibleRuntimes: [python3.12]
-      ContentUri: ../lambda-layers/langchain-layer/
+      Content: .build/lambda-layers/langchain-layer/
       LicenseInfo: MIT
 
   # ── Lambda #7: Find Implicated Fields ──
@@ -71,6 +74,7 @@ Resources:
       FunctionName: !Sub "${ProjectName}-find-fields"
       Runtime: python3.12
       Handler: handler.handler
+      Code: .build/lambda-functions/find-fields/
       MemorySize: 1024
       Timeout: 900
       Layers:
@@ -79,9 +83,9 @@ Resources:
         Variables:
           BEDROCK_REGION: !Ref AWSRegion
           BEDROCK_MODEL_ID: !Ref BedrockModelId
-          S3_BUCKET: !ImportValue !Sub "${ProjectName}-S3BucketName"
+          S3_BUCKET: { "Fn::ImportValue": !Sub "${ProjectName}-S3BucketName" }
           PROMPTS_PREFIX: prompts
-          DYNAMODB_TABLE: !ImportValue !Sub "${ProjectName}-DqcStoreTableName"
+          DYNAMODB_TABLE: { "Fn::ImportValue": !Sub "${ProjectName}-DqcStoreTableName" }
       Role: !GetAtt LambdaExecutionRole.Arn
       Tags: [{ Key: Project, Value: !Ref ProjectName }]
 
@@ -100,6 +104,7 @@ Resources:
       FunctionName: !Sub "${ProjectName}-sql-generator"
       Runtime: python3.12
       Handler: handler.handler
+      Code: .build/lambda-functions/sql-generator/
       MemorySize: 2048
       Timeout: 900
       Layers:
@@ -109,9 +114,9 @@ Resources:
           BEDROCK_REGION: !Ref AWSRegion
           BEDROCK_MODEL_ID: !Ref BedrockModelId
           JUDGE_MODEL_ID: !Ref JudgeBedrockModelId
-          S3_BUCKET: !ImportValue !Sub "${ProjectName}-S3BucketName"
+          S3_BUCKET: { "Fn::ImportValue": !Sub "${ProjectName}-S3BucketName" }
           PROMPTS_PREFIX: prompts
-          DYNAMODB_TABLE: !ImportValue !Sub "${ProjectName}-DqcStoreTableName"
+          DYNAMODB_TABLE: { "Fn::ImportValue": !Sub "${ProjectName}-DqcStoreTableName" }
           MAX_RETRIES: "5"
       Role: !GetAtt LambdaExecutionRole.Arn
       Tags: [{ Key: Project, Value: !Ref ProjectName }]
@@ -131,6 +136,7 @@ Resources:
       FunctionName: !Sub "${ProjectName}-bcbs-classifier"
       Runtime: python3.12
       Handler: handler.handler
+      Code: .build/lambda-functions/bcbs-classifier/
       MemorySize: 512
       Timeout: 300
       Layers:
@@ -139,7 +145,7 @@ Resources:
         Variables:
           BEDROCK_REGION: !Ref AWSRegion
           BEDROCK_MODEL_ID: !Ref BedrockModelId
-          DYNAMODB_TABLE: !ImportValue !Sub "${ProjectName}-DqcStoreTableName"
+          DYNAMODB_TABLE: { "Fn::ImportValue": !Sub "${ProjectName}-DqcStoreTableName" }
       Role: !GetAtt LambdaExecutionRole.Arn
       Tags: [{ Key: Project, Value: !Ref ProjectName }]
 
@@ -155,7 +161,7 @@ Resources:
   DqcStream:
     Type: AWS::Lambda::EventSourceMapping
     Properties:
-      EventSourceArn: !ImportValue !Sub "${ProjectName}-DqcStoreTableArn"
+      EventSourceArn: { "Fn::ImportValue": !Sub "${ProjectName}-DqcStoreStreamArn" }
       FunctionName: !Ref BcbsClassifierFunction
       StartingPosition: LATEST
       BatchSize: 1
@@ -165,7 +171,7 @@ Resources:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: !Sub "${ProjectName}-dqc-api"
-      Description: DQC PoC API — Bedrock integration for Nova Micro. Endpoints: /fields, /generate, /judge, /bcbs, /health, /checks, /dashboard
+      Description: "DQC PoC API — Bedrock integration for Nova Micro. Endpoints: /fields, /generate, /judge, /bcbs, /health, /checks, /dashboard"
 
   # --- /health ---
   DqcApiRoot:
@@ -182,10 +188,12 @@ Resources:
       ResourceId: !Ref DqcApiRoot
       HttpMethod: GET
       AuthorizationType: NONE
+      MethodResponses:
+        - StatusCode: '200'
       Integration:
         Type: MOCK
         IntegrationResponses:
-          - StatusCode: 200
+          - StatusCode: '200'
             ResponseTemplates:
               application/json: '{"status": "healthy", "service": "dqc-poc", "version": "1.0.0"}'
         RequestTemplates:
@@ -209,7 +217,7 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:paths-and-querystring-parameters:${FindFieldsFunction.Arn}"
+        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:path/2015-03-31/functions/${FindFieldsFunction.Arn}/invocations"
 
   # --- /generate (Issue #9) ---
   DqcApiGenerateResource:
@@ -229,7 +237,7 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:paths-and-querystring-parameters:${SqlGeneratorFunction.Arn}"
+        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:path/2015-03-31/functions/${SqlGeneratorFunction.Arn}/invocations"
 
   # --- /judge ---
   DqcApiJudgeResource:
@@ -249,7 +257,7 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:paths-and-querystring-parameters:${SqlGeneratorFunction.Arn}"
+        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:path/2015-03-31/functions/${SqlGeneratorFunction.Arn}/invocations"
 
   # --- /bcbs (Issue #2) ---
   DqcApiBcbsResource:
@@ -269,7 +277,7 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:paths-and-querystring-parameters:${BcbsClassifierFunction.Arn}"
+        Uri: !Sub "arn:aws:apigateway:${AWSRegion}:lambda:path/2015-03-31/functions/${BcbsClassifierFunction.Arn}/invocations"
 
   # --- /checks ---
   DqcApiChecksResource:
@@ -286,10 +294,12 @@ Resources:
       ResourceId: !Ref DqcApiChecksResource
       HttpMethod: GET
       AuthorizationType: NONE
+      MethodResponses:
+        - StatusCode: '200'
       Integration:
         Type: MOCK
         IntegrationResponses:
-          - StatusCode: 200
+          - StatusCode: '200'
             ResponseTemplates:
               application/json: '{"checks": [], "message": "ECS service not connected"}'
         RequestTemplates:
@@ -310,10 +320,12 @@ Resources:
       ResourceId: !Ref DqcApiDashboardResource
       HttpMethod: GET
       AuthorizationType: NONE
+      MethodResponses:
+        - StatusCode: '200'
       Integration:
         Type: MOCK
         IntegrationResponses:
-          - StatusCode: 200
+          - StatusCode: '200'
             ResponseTemplates:
               application/json: '{"dashboard": {}, "message": "ECS service not connected"}'
         RequestTemplates:
