@@ -390,6 +390,56 @@ done
 cd "${SCRIPT_DIR}"
 echo ""
 
+# ── Failure diagnostics ────────────────────────────────────────────────
+# `aws cloudformation deploy` reports change-set failures as "Waiter
+# ChangeSetCreateComplete failed: Waiter encountered a terminal failure state",
+# which says nothing. The reason is on the change set, not in stack events.
+explain_deploy_failure() {
+  local stack="$1"
+  echo ""
+  echo "──────────────────────────────────────────────────────────────"
+  echo "  Deploy of '${stack}' failed. Details:"
+  echo "──────────────────────────────────────────────────────────────"
+
+  local status
+  status=$(aws cloudformation describe-stacks --stack-name "${stack}" \
+    --region "${AWS_REGION}" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+  echo "  Stack status: ${status}"
+  echo ""
+
+  local cs
+  cs=$(aws cloudformation list-change-sets --stack-name "${stack}" \
+    --region "${AWS_REGION}" \
+    --query 'Summaries|sort_by(@,&CreationTime)[-1].ChangeSetId' \
+    --output text 2>/dev/null || echo "")
+
+  if [[ -n "${cs}" ]] && [[ "${cs}" != "None" ]]; then
+    echo "  Latest change set:"
+    aws cloudformation describe-change-set --change-set-name "${cs}" \
+      --region "${AWS_REGION}" --query 'StatusReason' --output text 2>/dev/null \
+      | sed 's/^/    /'
+    echo ""
+  fi
+
+  echo "  Failed resources (if the change set executed):"
+  aws cloudformation describe-stack-events --stack-name "${stack}" \
+    --region "${AWS_REGION}" \
+    --query 'StackEvents[?contains(ResourceStatus,`FAILED`)].[LogicalResourceId,ResourceStatusReason]' \
+    --output text 2>/dev/null | head -20 | sed 's/^/    /' || true
+  echo ""
+
+  case "${status}" in
+    ROLLBACK_COMPLETE|REVIEW_IN_PROGRESS)
+      echo "  A stack in ${status} cannot be updated — it never created"
+      echo "  successfully. Delete it and re-run:"
+      echo "    aws cloudformation delete-stack --stack-name ${stack} --region ${AWS_REGION}"
+      echo "    aws cloudformation wait stack-delete-complete --stack-name ${stack} --region ${AWS_REGION}"
+      ;;
+  esac
+  echo "──────────────────────────────────────────────────────────────"
+  exit 1
+}
+
 # ── Stage 1: Deploy Infrastructure ─────────────────────────────────────
 echo "=== Stage 1: Deploying Infrastructure ==="
 echo ""
@@ -409,7 +459,8 @@ aws cloudformation deploy \
     MemoryMiB=4096 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset \
-  --tags Project=dqc-poc ManagedBy=cloudformation Stage=infrastructure
+  --tags Project=dqc-poc ManagedBy=cloudformation Stage=infrastructure \
+  || explain_deploy_failure "${STACK_NAME}-infrastructure"
 
 echo ""
 
@@ -451,7 +502,8 @@ aws cloudformation deploy \
     JudgeBedrockModelId=eu.amazon.nova-pro-v1:0 \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --no-fail-on-empty-changeset \
-  --tags Project=dqc-poc ManagedBy=cloudformation Stage=serverless
+  --tags Project=dqc-poc ManagedBy=cloudformation Stage=serverless \
+  || explain_deploy_failure "${STACK_NAME}-serverless"
 
 echo ""
 
