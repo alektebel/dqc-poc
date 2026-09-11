@@ -26,6 +26,8 @@ SAS pipeline (7 layers) ──► CICLOS_CALIBRADOS schema ──► data_dictio
         per-dimension + per-article recall  →  DEFICIENT / UNCOVERED flags
 ```
 
+> **Gaps and next techniques:** [`docs/EVAL_ROADMAP.md`](../../docs/EVAL_ROADMAP.md).
+
 ## Files
 
 | Path | Role |

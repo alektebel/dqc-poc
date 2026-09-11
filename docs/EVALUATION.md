@@ -7,6 +7,11 @@ database with a known schema and dictionary, with 100% coverage of every
 field against the applicable articles of the EBA GL/2017/16 PD & LGD
 guidelines.*
 
+> **See also** [`EVAL_ROADMAP.md`](EVAL_ROADMAP.md) — what this harness does
+> *not* measure yet: the LLM judge that gates production output is itself
+> unevaluated and fails open; retry efficiency, run-to-run variance, refusal
+> quality, cost/latency and BCBS 239 classification accuracy are untracked.
+
 ---
 
 ## 1. Where the project stands
