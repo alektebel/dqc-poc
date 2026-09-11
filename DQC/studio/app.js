@@ -649,7 +649,7 @@ function renderGenerar() {
       </div>
     </div>
     <button class="studio-btn" id="start-gen" ${state.generating ? 'disabled' : ''} style="margin-top:28px;">${state.generating ? 'Generando…' : 'Generar controles' + countLabel}</button>
-    <div class="studio-error" id="gen-error" hidden></div>
+    <div class="studio-error" id="gen-error" ${state.error ? '' : 'hidden'}>${state.error ? esc(state.error) : ''}</div>
     ${planMarkup}`;
   $('#dict-file').addEventListener('change', (e) => { state.dictionaryFile = e.target.files[0] || null; scheduleRecognition(); render(); });
   $('#cases-file').addEventListener('change', (e) => { state.casesFile = e.target.files[0] || null; render(); });
@@ -815,10 +815,19 @@ function planFromDemo(seedIdx) {
 }
 
 async function startGenerate() {
+  if (state.generating) return;
   const lines = queueRules();
-  if (!lines.length || state.generating) return;
-  const errBox = $('#gen-error');
-  if (errBox) errBox.hidden = true;
+  state.error = '';
+  if (!lines.length) {
+    state.error = 'Añade al menos una regla a la cola antes de generar.';
+    render(); return;
+  }
+  // The backend declares `dictionary` as a required File; without it the
+  // request 422s and the failure used to disappear.
+  if (!DEMO && !state.dictionaryFile) {
+    state.error = 'Adjunta el diccionario de campos (.xlsx) antes de generar.';
+    render(); return;
+  }
   // sync the free-text backing field so the plan / demo path always has the rules
   state.rules = lines.join('\n');
   state.generating = true; state.genDone = false; state.plan = lines.map((r) => ({ regla: r, fase: 'En espera', casos: '—', trace: [], mark: '', markBg: 'var(--color-bg)', markFg: 'var(--color-text)' }));
