@@ -51,8 +51,11 @@ the seeded demo controls). For real generation, either:
   ```
 
   `curl localhost:8000/health` should then report `"llm_backend":"bedrock"`.
-  Note `REGLLM_LLM=auto` **never** selects Bedrock — it probes litert, ollama
-  and gguf, then falls back to `stub`, so it must be set explicitly. Defaults
+  `REGLLM_LLM=auto` also reaches Nova now: it probes litert, ollama and gguf,
+  then Bedrock when AWS credentials resolve, and only stubs if nothing answers.
+  Setting it explicitly is still clearer, and is what the Docker default does
+  (compose ships `REGLLM_LLM=api`; put `REGLLM_LLM=bedrock` in `.env` to make
+  Nova the default for `docker compose up`). Defaults
   are `eu.amazon.nova-micro-v1:0` in `eu-west-1`; that id is an *inference
   profile*, and the bare `amazon.nova-micro-v1:0` is rejected for on-demand
   throughput. Credentials come from the usual boto3 chain — compose mounts

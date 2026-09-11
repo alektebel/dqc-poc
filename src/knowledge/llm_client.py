@@ -28,6 +28,9 @@ Auto-detects an available OpenAI-compatible local backend:
 Configuration via environment variables (with sensible defaults):
 
 - ``REGLLM_LLM``             ``auto`` | ``litert`` | ``ollama`` | ``gguf`` | ``bedrock`` | ``stub``
+                            ``auto`` probes litert, then ollama, then gguf,
+                            then Bedrock (when AWS credentials resolve), and
+                            only stubs if none of them answer.
 - ``OLLAMA_URL``             default ``http://localhost:11434``
 - ``OLLAMA_MODEL``           Ollama tag or path to ``.gguf`` file
 - ``LITERT_URL``             default ``http://localhost:9379/v1``
@@ -342,11 +345,19 @@ class LocalLLMClient:
                     "REGLLM_LLM=gguf but GGUF_MODEL_PATH=%r does not point to "
                     "a file; falling back to stub", self.gguf_model_path,
                 )
+        if self.prefer == "auto" and self._probe_bedrock():
+            # No local backend answered, but AWS credentials resolve — prefer a
+            # real model over the stub.
+            logger.info("No local LLM backend reachable; using Bedrock %s in %s",
+                        self.bedrock_model_id, self.bedrock_region)
+            self._backend = "bedrock"
+            return "bedrock"
         if self.prefer == "ollama":
             # User explicitly asked for ollama but it's unreachable
             logger.warning("REGLLM_LLM=ollama but Ollama unreachable; falling back")
         elif self.prefer == "auto":
-            logger.info("No local LLM backend reachable; falling back")
+            logger.info("No local LLM backend reachable and no AWS credentials; "
+                        "falling back")
         self._backend = self._fallback_backend()
         return self._backend
 
@@ -375,6 +386,24 @@ class LocalLLMClient:
                 return True
             bare = name.split(":", 1)[0]
             return any(t.split(":", 1)[0] == bare for t in tags)
+        except Exception:
+            return False
+
+    def _probe_bedrock(self) -> bool:
+        """Cheap availability check — boto3 importable and credentials
+        resolvable.
+
+        Deliberately does NOT call Bedrock: an invocation costs tokens and
+        would slow every cold start. A missing model or a denied
+        InvokeModel surfaces on the first real chat instead. Credential
+        lookup can touch IMDS, but botocore's default there is a single
+        1s attempt, in line with the other probes.
+        """
+        if _boto3 is None:
+            return False
+        try:
+            session = _boto3.session.Session(region_name=self.bedrock_region)
+            return session.get_credentials() is not None
         except Exception:
             return False
 
