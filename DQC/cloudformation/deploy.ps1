@@ -52,7 +52,9 @@ param(
     [Parameter(Mandatory = $false)]
     [string] $SubnetIds = "",
 
-    [switch] $WithEcs
+    [switch] $WithEcs,
+
+    [string] $PythonBin = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -248,6 +250,70 @@ if ($Destroy) {
     exit 0
 }
 
+# ── Resolve a working Python interpreter ──────────────────────────────
+# The interpreter must be *executed*, not just located: the WindowsApps
+# python.exe / python3.exe are app-execution aliases that print
+# "No se encontró Python" / "Python was not found" and exit.
+Write-Step "Locating Python..."
+
+function Test-PythonCandidate {
+    param([string] $Exe, [string[]] $PreArgs = @())
+    try {
+        $probe = @($PreArgs) + @("-c", "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)")
+        & $Exe @probe 2>$null | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } catch { return $false }
+}
+
+$pythonExe = $null
+$pythonPreArgs = @()
+
+if ($PythonBin) {
+    if (-not (Test-PythonCandidate -Exe $PythonBin)) {
+        Write-Host "ERROR: -PythonBin '$PythonBin' is not a working Python 3.9+ interpreter." -ForegroundColor Red
+        exit 1
+    }
+    $pythonExe = $PythonBin
+} else {
+    $candidates = @(
+        @{ Exe = "python";  PreArgs = @() },
+        @{ Exe = "python3"; PreArgs = @() },
+        @{ Exe = "py";      PreArgs = @("-3") }
+    )
+    foreach ($c in $candidates) {
+        if (Test-PythonCandidate -Exe $c.Exe -PreArgs $c.PreArgs) {
+            $pythonExe = $c.Exe
+            $pythonPreArgs = $c.PreArgs
+            break
+        }
+    }
+}
+
+if (-not $pythonExe) {
+    Write-Host ""
+    Write-Host "ERROR: No working Python 3.9+ interpreter found." -ForegroundColor Red
+    Write-Host "       Tried: python, python3, py -3" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "       If 'python --version' works, the alias stub is shadowing it. Either:" -ForegroundColor Yellow
+    Write-Host "         - Settings > Apps > App execution aliases > turn off" -ForegroundColor Yellow
+    Write-Host "           python.exe / python3.exe, or" -ForegroundColor Yellow
+    Write-Host "         - point at it directly:" -ForegroundColor Yellow
+    Write-Host "             .\deploy.ps1 -PythonBin C:\Python312\python.exe" -ForegroundColor Yellow
+    exit 1
+}
+
+# Invoke as: & $pythonExe @pythonPreArgs <args>
+& $pythonExe @pythonPreArgs -m pip --version 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: '$pythonExe' has no pip module. Install it with:" -ForegroundColor Red
+    Write-Host "         $pythonExe -m ensurepip --upgrade" -ForegroundColor Yellow
+    exit 1
+}
+
+$pythonVersion = & $pythonExe @pythonPreArgs -c "import sys; print(sys.version.split()[0])"
+Write-Host "    Using: $pythonExe $($pythonPreArgs -join ' ') ($pythonVersion)"
+Write-Host ""
+
 # ── Stage 0: Build Lambda Layer ───────────────────────────────────────
 # Wheels must match the Lambda runtime (python3.12, x86_64 manylinux), not the
 # local interpreter, or native deps like pydantic-core fail to import at runtime.
@@ -272,7 +338,7 @@ if (-not (Test-Path $layerDir)) {
 
 $layerTarget = Join-Path $buildDir "lambda-layers\langchain-layer\python"
 New-Item -ItemType Directory -Force -Path $layerTarget | Out-Null
-python -m pip install -r (Join-Path $layerDir "requirements.txt") -t $layerTarget @pipLambdaArgs --quiet
+& $pythonExe @pythonPreArgs -m pip install -r (Join-Path $layerDir "requirements.txt") -t $layerTarget @pipLambdaArgs --quiet
 Write-Host "    Layer built at .build\lambda-layers\langchain-layer\python"
 
 # ── Stage 0b: Build Lambda function bundles ────────────────────────────
@@ -297,7 +363,7 @@ foreach ($funcDir in $funcDirs) {
     # Blank/comment-only requirements mean "everything comes from the layer".
     $reqFile = Join-Path $funcPath "requirements.txt"
     if ((Test-Path $reqFile) -and (Get-Content $reqFile | Where-Object { $_ -match '^\s*[^#\s]' })) {
-        python -m pip install -r $reqFile -t $funcTarget @pipLambdaArgs --quiet
+        & $pythonExe @pythonPreArgs -m pip install -r $reqFile -t $funcTarget @pipLambdaArgs --quiet
     }
 
     Write-Host "    $funcDir staged."

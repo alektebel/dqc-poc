@@ -27,7 +27,7 @@
 #
 # Prerequisites:
 #   - AWS CLI configured (aws configure or SSO)
-#   - Python 3.11+ (for Lambda layer builds)
+#   - Python 3.9+ on PATH as python3, python or py (override with PYTHON_BIN=...)
 #   - Bedrock model access for Nova Micro + Nova Pro in the target region
 #   - --with-ecs only: an EXISTING VPC with 2+ subnets in different AZs. This
 #     script never creates networking.
@@ -40,6 +40,7 @@ AWS_REGION="${AWS_REGION:-eu-west-1}"
 CONFIRM="${CONFIRM:-false}"
 DESTROY="${DESTROY:-false}"
 WITH_ECS="${WITH_ECS:-false}"
+PYTHON_BIN="${PYTHON_BIN:-}"
 VPC_ID="${VPC_ID:-}"
 SUBNET_CSV="${SUBNET_IDS:-}"
 
@@ -269,6 +270,57 @@ if [[ "${DESTROY}" == "true" ]]; then
   exit 0
 fi
 
+# ── Resolve a working Python interpreter ───────────────────────────────
+# `python3` must be *executed*, not just found: on Windows the WindowsApps
+# python3.exe is an app-execution alias that prints "No se encontró Python" /
+# "Python was not found" and exits, so `command -v python3` succeeds anyway.
+echo "==> Locating Python..."
+
+py_works() {
+  # Intentionally unquoted so a value like "py -3" splits into command + args.
+  # shellcheck disable=SC2086
+  $1 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' > /dev/null 2>&1
+}
+
+if [[ -n "${PYTHON_BIN}" ]]; then
+  if ! py_works "${PYTHON_BIN}"; then
+    echo "ERROR: PYTHON_BIN='${PYTHON_BIN}' is not a working Python 3.9+ interpreter."
+    exit 1
+  fi
+else
+  for candidate in python3 python "py -3" py; do
+    if py_works "${candidate}"; then
+      PYTHON_BIN="${candidate}"
+      break
+    fi
+  done
+fi
+
+if [[ -z "${PYTHON_BIN}" ]]; then
+  echo ""
+  echo "ERROR: No working Python 3.9+ interpreter found."
+  echo "       Tried: python3, python, py -3, py"
+  echo ""
+  echo "       If 'python --version' works but 'python3' does not, you are on"
+  echo "       Windows and python3.exe is the Microsoft Store alias stub. Either:"
+  echo "         - disable it: Settings > Apps > App execution aliases >"
+  echo "           turn off python.exe / python3.exe, or"
+  echo "         - run with an explicit interpreter:"
+  echo "             PYTHON_BIN=python ./deploy.sh --region ${AWS_REGION}"
+  exit 1
+fi
+
+# shellcheck disable=SC2086
+if ! $PYTHON_BIN -m pip --version > /dev/null 2>&1; then
+  echo "ERROR: '${PYTHON_BIN}' has no pip module. Install it with:"
+  echo "         ${PYTHON_BIN} -m ensurepip --upgrade"
+  exit 1
+fi
+
+# shellcheck disable=SC2086
+echo "    Using: ${PYTHON_BIN} ($($PYTHON_BIN -c 'import sys; print(sys.version.split()[0])'))"
+echo ""
+
 # ── Stage 0: Build Lambda layer ────────────────────────────────────────
 # Wheels must match the Lambda runtime (python3.12, x86_64 manylinux), not the
 # local interpreter, or native deps like pydantic-core fail to import at runtime.
@@ -285,7 +337,8 @@ rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}/lambda-layers/langchain-layer"
 
 echo "==> Building Lambda layer (LangChain + Bedrock)..."
-python3 -m pip install -r "${SCRIPT_DIR}/lambda-layers/langchain-layer/requirements.txt" \
+# shellcheck disable=SC2086
+$PYTHON_BIN -m pip install -r "${SCRIPT_DIR}/lambda-layers/langchain-layer/requirements.txt" \
   --target "${BUILD_DIR}/lambda-layers/langchain-layer/python" "${PIP_LAMBDA_ARGS[@]}" --quiet
 echo "    Layer built at .build/lambda-layers/langchain-layer/python"
 echo ""
@@ -303,7 +356,8 @@ for func_dir in find-fields sql-generator bcbs-classifier; do
 
   # Blank/comment-only requirements mean "everything comes from the layer".
   if [[ -f "${SRC}/requirements.txt" ]] && grep -qE '^[[:space:]]*[^#[:space:]]' "${SRC}/requirements.txt"; then
-    python3 -m pip install -r "${SRC}/requirements.txt" \
+    # shellcheck disable=SC2086
+    $PYTHON_BIN -m pip install -r "${SRC}/requirements.txt" \
       --target "${DEST}" "${PIP_LAMBDA_ARGS[@]}" --quiet
   fi
 

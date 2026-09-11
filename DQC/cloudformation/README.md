@@ -58,7 +58,9 @@ DQC/cloudformation/
 ### Prerequisites
 
 1. AWS CLI configured (`aws configure` or `aws configure sso`)
-2. Python 3.11+ (for Lambda layer builds)
+2. Python 3.9+ for the Lambda layer builds, on PATH as `python3`, `python` or
+   `py -3`. The scripts probe each by *running* it, so the Windows Store alias
+   stub is skipped automatically — see Troubleshooting if it still trips.
 3. IAM permissions to create: ECS, ECR, Lambda, API Gateway, DynamoDB, S3, IAM roles
 4. **Bedrock model access** for Amazon Nova Micro *and* Nova Pro, enabled in the
    target region (console → Bedrock → Model access). Without it every Lambda
@@ -274,6 +276,19 @@ Update the values with the CloudFormation outputs, then use the API Gateway URLs
 ```
 
 ## Troubleshooting
+
+### "No se encontró Python" / "Python was not found"
+On Windows, `WindowsApps\python3.exe` is an app-execution alias that prints this
+and exits, even when a real Python is installed as `python`. The scripts detect
+and skip it. If you hit it anyway, either turn the alias off (Settings → Apps →
+App execution aliases → `python.exe` / `python3.exe`) or name the interpreter:
+
+```bash
+PYTHON_BIN=python ./deploy.sh --region eu-west-1 --stack-name dqc-poc
+```
+```powershell
+.\deploy.ps1 -PythonBin C:\Python312\python.exe
+```
 
 ### Lambda layer size
 The layer is ~177 MB unzipped (numpy and botocore dominate). Lambda's hard limit
