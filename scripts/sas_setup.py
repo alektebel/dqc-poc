@@ -22,6 +22,7 @@ import getpass
 import json
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -177,6 +178,38 @@ def java_version() -> str:
         return ""
 
 
+def session_context() -> dict:
+    """Where is this Python actually running?
+
+    Decisive for SAS access. A published Citrix/RDP app or desktop is a
+    *remote* session: the IOM port is reachable from the session host, not from
+    the workstation that launched it. Code running on the laptop cannot reach a
+    server that only the Citrix farm can see, however well saspy is configured,
+    so knowing which side of the gateway you are on comes before any
+    connection tuning.
+
+    Citrix and RDP both set SESSIONNAME (ICA-* for Citrix, RDP-* for RDP) and
+    CLIENTNAME (the launching device).
+    """
+    env = os.environ
+    session = env.get("SESSIONNAME", "")
+    client = env.get("CLIENTNAME", "")
+    kind = "local"
+    if session.upper().startswith("ICA") or env.get("CITRIX_SESSION"):
+        kind = "citrix"
+    elif session.upper().startswith("RDP"):
+        kind = "rdp"
+    elif client and client.upper() != "CONSOLE":
+        kind = "remote"
+    return {
+        "kind": kind,
+        "sessionname": session,
+        "clientname": client,
+        "host": socket.gethostname(),
+        "platform": sys.platform,
+    }
+
+
 def check_dependencies(mode: str) -> list[str]:
     """Missing prerequisites, as actionable install lines."""
     missing: list[str] = []
@@ -323,6 +356,18 @@ def ask(prompt: str, default: str = "") -> str:
 def wizard(existing: Profile) -> Profile:
     print("\n── SAS connection setup ──────────────────────────────────────")
     print("  Nothing is sent until the end, and no password is written to disk.\n")
+
+    ctx = session_context()
+    print(f"  Running on {ctx['host']} ({ctx['platform']}), session: {ctx['kind']}")
+    if ctx["kind"] == "local" and ctx["platform"] == "win32":
+        print("  Note: this is a local Windows session. If SAS is only published")
+        print("  through Citrix, the IOM port is reachable from the Citrix session")
+        print("  host, not from here — see docs/SAS_CONNECTIVITY.md.")
+    elif ctx["kind"] in ("citrix", "rdp"):
+        print(f"  Inside a {ctx['kind']} session (launched from "
+              f"{ctx['clientname'] or 'unknown'}) — a direct IOM connection is "
+              f"plausible from here.")
+    print()
 
     mode = ask("Mode: (1) SAS 9.4 workspace server via IOM  (2) SAS Viya REST",
                "1" if existing.mode == "iom" else "2")

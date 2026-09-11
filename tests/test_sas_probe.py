@@ -369,3 +369,76 @@ def test_windows_jre_hint_uses_winget(monkeypatch):
     monkeypatch.setattr(ss.shutil, "which", lambda name: None)
     monkeypatch.setattr(ss.sys, "platform", "win32")
     assert "winget" in ss.jre_install_hint()
+
+
+# ── simulation (no server needed) ────────────────────────────────────────
+
+def test_every_declared_code_can_be_simulated():
+    """Completeness: a code whose stage is missing from the simulation order
+    raises ValueError. CFG_* did exactly that until the order included
+    'config'."""
+    for code in sp.CODES:
+        if code == "SKIPPED":
+            continue
+        probe = sp.simulate(code)
+        assert probe.results, code
+
+
+def test_simulation_puts_exactly_one_failure_at_the_right_stage():
+    for code, (stage, _retry, _meaning) in sp.CODES.items():
+        if code in ("OK", "SKIPPED"):
+            continue
+        failed = sp.simulate(code).failed
+        assert len(failed) == 1, code
+        assert failed[0].code == code
+        if stage != "-":
+            assert failed[0].stage == stage, code
+
+
+def test_simulated_ok_has_no_failures():
+    assert sp.simulate("OK").failed == []
+
+
+def test_stages_before_the_failure_pass_and_after_it_are_skipped():
+    probe = sp.simulate("SESS_QUOTA")
+    codes = {r.stage: r.code for r in probe.results}
+    assert codes["tcp"] == "OK" and codes["auth"] == "OK"
+    assert codes["session"] == "SESS_QUOTA"
+    assert codes["submit"] == "SKIPPED" and codes["dialect"] == "SKIPPED"
+
+
+def test_simulating_an_unknown_code_raises():
+    with pytest.raises(KeyError):
+        sp.simulate("NOT_A_CODE")
+
+
+def test_retryability_survives_simulation():
+    """The flag a retry policy branches on must be right in replay too."""
+    assert sp.simulate("SESS_QUOTA").failed[0].retryable is True
+    assert sp.simulate("AUTH_INVALID").failed[0].retryable is False
+
+
+# ── session context (Citrix / RDP) ───────────────────────────────────────
+
+@pytest.mark.parametrize("env, expected", [
+    ({"SESSIONNAME": "ICA-CGP#0", "CLIENTNAME": "LAPTOP01"}, "citrix"),
+    ({"SESSIONNAME": "RDP-Tcp#12", "CLIENTNAME": "LAPTOP01"}, "rdp"),
+    ({"SESSIONNAME": "Console", "CLIENTNAME": "Console"}, "local"),
+    ({}, "local"),
+])
+def test_detects_whether_python_runs_inside_a_published_session(
+        env, expected, monkeypatch):
+    """Decisive for SAS access: inside a Citrix session the IOM port may be
+    reachable, from the launching laptop it usually is not."""
+    for key in ("SESSIONNAME", "CLIENTNAME", "CITRIX_SESSION"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert ss.session_context()["kind"] == expected
+
+
+def test_a_named_client_without_sessionname_is_still_remote(monkeypatch):
+    for key in ("SESSIONNAME", "CITRIX_SESSION"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CLIENTNAME", "LAPTOP01")
+    assert ss.session_context()["kind"] == "remote"

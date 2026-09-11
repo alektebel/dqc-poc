@@ -113,6 +113,79 @@ interpolated into a string literal. `C:\temp\...` silently becomes a TAB and
 `SyntaxError` from the truncated `\U` escape. Every value goes through
 `repr()` for that reason, and the round trip is tested against both.
 
+### Windows prerequisites, in order
+
+| # | What | How | Needed for |
+|---|---|---|---|
+| 1 | **Python 3.9+** | python.org or `winget install Python.Python.3.12` | everything |
+| 2 | **Java 11 JRE** | `winget install EclipseAdoptium.Temurin.11.JRE` | saspy IOM only |
+| 3 | **saspy** | `pip install saspy` | saspy IOM only |
+| 4 | **SAS client jars** | from a SAS client installation — **not installable**, see above | saspy IOM only |
+| 5 | **Network route to the IOM port** | — | saspy IOM only, and see Citrix below |
+
+Turn off the Microsoft Store Python aliases (Settings → Apps → App execution
+aliases → `python.exe` / `python3.exe`), or `python3` resolves to a stub that
+prints *"No se encontró Python"* and exits 9009.
+
+Viya mode needs only items 1 and `pip install httpx` — no Java, no jars.
+
+## Citrix, and what "EPA" means here
+
+**EPA is Citrix Gateway's Endpoint Analysis scan.** Before the gateway lets a
+device connect it runs a posture check on the *client*: antivirus present and
+running, firewall enabled, OS patch level, domain membership, sometimes a
+machine certificate. It is client-side attestation to the gateway, performed by
+the Citrix EPA plug-in or the browser component.
+
+**You cannot meaningfully simulate it,** and trying would be the wrong goal.
+There is nothing for our code to implement or fake: EPA either passes on a
+managed device and the gateway opens, or it does not. Simulating a pass would
+prove nothing about whether the real gateway admits you.
+
+The consequential question is a different one:
+
+> **Is SAS reachable from the machine running Python, or only from inside the
+> Citrix session?**
+
+If SAS is a *published application* behind Citrix, the IOM port is reachable
+from the **Citrix session host**, not from the laptop that launched it. No
+amount of saspy configuration fixes that — the route does not exist. This is
+the single fact that decides the integration design, so establish it first:
+
+```powershell
+python scripts\sas_setup.py        # reports the session kind it is running in
+Test-NetConnection sas.corp -Port 8591   # run BOTH on the laptop and inside Citrix
+```
+
+`session_context()` reports `citrix` when `SESSIONNAME` starts with `ICA`,
+`rdp` for `RDP-*`, and `local` otherwise — so you can tell which side of the
+gateway the interpreter is on.
+
+### The four options, once you know
+
+| Situation | Approach |
+|---|---|
+| IOM port reachable from the workstation | saspy IOM as documented — the happy path |
+| SAS only inside Citrix | Run Python **inside** the published session. Needs Python + Java + saspy installed on the session host, which is an IT request, not a local install. |
+| SAS Viya available | Use the REST mode. It is HTTPS, so it traverses gateways and proxies that block IOM's port, and needs neither Java nor the jars. **Ask whether Viya exists before pursuing IOM** — it removes most of this page. |
+| None of the above | Keep the boundary at files: generated SQL out, result extracts in. Slower, but it is the option that always works and needs no network path at all. |
+
+### Simulating the connection instead
+
+What you *can* usefully simulate is everything downstream of the gateway — so
+the retry policy, error surfacing and runbook can be written and tested before
+any server or Citrix access exists:
+
+```bash
+python scripts/sas_probe.py --simulate SESS_QUOTA   # one outcome
+python scripts/sas_probe.py --simulate ALL --json   # all 32, machine-readable
+python scripts/sas_probe.py --simulate OK           # the success path
+```
+
+Each replays a full nine-stage run with the stages before the failure passing,
+the failure classified, and the rest skipped — the same shape a real run
+produces, including the `retryable` flag your handling branches on.
+
 ## Diagnosing one — `scripts/sas_probe.py`
 
 [`scripts/sas_probe.py`](../scripts/sas_probe.py) walks the connection path in

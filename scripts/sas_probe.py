@@ -385,6 +385,42 @@ def stage_saspy(probe: Probe, cfgname: str, host: str, port: int, user: str,
             pass
 
 
+# ── simulation ────────────────────────────────────────────────────────────
+# A real SAS server is often unavailable long before the integration that
+# depends on it needs writing — behind Citrix, licensed per seat, or simply
+# owned by another team. --simulate replays any classified outcome so retry
+# policy, error surfacing and operational runbooks can be exercised and tested
+# without one.
+
+# Which stages have already succeeded when a given stage fails.
+_STAGE_ORDER = ["dependency", "config", "tcp", "tls", "auth", "session",
+                "submit", "library", "table", "dialect"]
+assert {v[0] for v in CODES.values()} <= set(_STAGE_ORDER) | {"-"}, \
+    "every code's stage must be simulable"
+
+
+def simulate(code: str) -> Probe:
+    """Build the Probe a real run would produce if it failed with ``code``."""
+    if code not in CODES:
+        raise KeyError(code)
+    probe = Probe()
+    stage, _retry, _meaning = CODES[code]
+    order = [st for st in _STAGE_ORDER if st != "config" or stage == "config"]
+    if code == "OK":
+        for st in order:
+            probe.add(st, "OK", "simulated")
+        return probe
+    if stage == "-":
+        stage = "submit"
+    idx = order.index(stage)
+    for st in order[:idx]:
+        probe.add(st, "OK", "simulated")
+    probe.add(stage, code, f"simulated {code}")
+    for st in order[idx + 1:]:
+        probe.add(st, "SKIPPED", f"simulated failure at {stage}")
+    return probe
+
+
 # ── reporting ─────────────────────────────────────────────────────────────
 
 def print_report(probe: Probe) -> None:
@@ -446,8 +482,32 @@ def main() -> int:
                     help="also create a scratch WORK dataset (default: read-only)")
     ap.add_argument("--dry-run", action="store_true",
                     help="list the stages and failure codes, connect to nothing")
+    ap.add_argument("--simulate", metavar="CODE",
+                    help="replay a classified outcome (e.g. SESS_QUOTA, OK, "
+                         "ALL) without a server, to exercise error handling")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
+
+    if args.simulate:
+        wanted = ([c for c in CODES if c not in ("OK", "SKIPPED")]
+                  if args.simulate.upper() == "ALL" else [args.simulate])
+        overall = 0
+        for code in wanted:
+            if code not in CODES:
+                print(f"Unknown code {code!r}. Try --dry-run for the list.",
+                      file=sys.stderr)
+                return 2
+            probe = simulate(code)
+            if args.json:
+                print(json.dumps({"simulated": code,
+                                  "results": [r.to_dict() for r in probe.results],
+                                  "feasible": not probe.failed}))
+            else:
+                print(f"\n══ simulating {code} "
+                      f"{'─' * max(0, 60 - len(code))}")
+                print_report(probe)
+            overall |= 1 if probe.failed else 0
+        return overall
 
     if args.dry_run or (not args.host and not args.viya):
         if not args.json:
