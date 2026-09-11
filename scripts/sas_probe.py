@@ -27,6 +27,7 @@ of a broken connection tells you nothing.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import socket
@@ -141,8 +142,14 @@ def classify_socket_error(exc: Exception) -> tuple[str, str]:
         return "NET_TIMEOUT", "no response before the timeout"
     if isinstance(exc, ConnectionRefusedError):
         return "NET_REFUSED", str(exc)
-    if isinstance(exc, OSError) and getattr(exc, "errno", None) in (101, 113, 51, 65):
-        return "NET_UNREACHABLE", str(exc)
+    # errno values differ per platform, and Windows reports WSA codes — 10051
+    # ENETUNREACH / 10065 EHOSTUNREACH — which the symbolic constants do not
+    # cover, so both are checked.
+    if isinstance(exc, OSError):
+        codes = {getattr(exc, "errno", None), getattr(exc, "winerror", None)}
+        if codes & {errno.ENETUNREACH, errno.EHOSTUNREACH, 101, 113, 51, 65,
+                    10051, 10065}:
+            return "NET_UNREACHABLE", str(exc)
     return "UNKNOWN", f"{type(exc).__name__}: {exc}"
 
 

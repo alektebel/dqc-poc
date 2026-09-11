@@ -94,6 +94,25 @@ If the SAS jars are absent, the connection cannot be made from that machine no
 matter what else is configured. Worth establishing before anyone is prompted
 for a password.
 
+### Windows
+
+Both scripts run on Windows; the setup script is where the differences live.
+
+| | |
+|---|---|
+| JRE | `winget install EclipseAdoptium.Temurin.11.JRE`, or `mise use -g java@temurin-11` if mise is installed |
+| SASHome | searched on **every drive letter**, plus `Program Files` and `Program Files (x86)` — site installs often put SASHome on a dedicated drive |
+| Classpath separator | `;`, taken from `os.pathsep` |
+| Encoding | usually `wlatin1` rather than `latin1` |
+| File permissions | `os.chmod` only toggles the read-only bit, so `icacls /inheritance:r /grant:r <user>:F` is applied as well; if that fails the script says so rather than implying the file is protected |
+
+One thing worth knowing if you edit `write_sascfg`: the generated
+`sascfg_personal.py` is a **Python module**, so a Windows path cannot be
+interpolated into a string literal. `C:\temp\...` silently becomes a TAB and
+`C:\Users\...` — where saspy's own `saspyiom.jar` lives — is a hard
+`SyntaxError` from the truncated `\U` escape. Every value goes through
+`repr()` for that reason, and the round trip is tested against both.
+
 ## Diagnosing one — `scripts/sas_probe.py`
 
 [`scripts/sas_probe.py`](../scripts/sas_probe.py) walks the connection path in

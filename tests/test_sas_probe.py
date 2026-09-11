@@ -144,8 +144,11 @@ def test_profiles_and_config_are_written_private(tmp_path, monkeypatch):
     p = ss.Profile(name="corp", host="sas.corp", port=8591, user="me")
     ss.save_profile(p)
     cfg = ss.write_sascfg(p)
-    assert (tmp_path / "sas_profiles.json").stat().st_mode & 0o077 == 0
-    assert cfg.stat().st_mode & 0o077 == 0
+    if sys.platform != "win32":
+        assert (tmp_path / "sas_profiles.json").stat().st_mode & 0o077 == 0
+        assert cfg.stat().st_mode & 0o077 == 0
+    else:                    # chmod only toggles the read-only bit there
+        assert (tmp_path / "sas_profiles.json").exists() and cfg.exists()
 
 
 def test_generated_sascfg_is_the_module_saspy_expects(tmp_path, monkeypatch):
@@ -296,3 +299,73 @@ def test_legacy_1_dot_8_version_string_is_parsed_as_8(monkeypatch):
     monkeypatch.setattr(ss, "java_version", lambda: 'java version "1.8.0_402"')
     monkeypatch.setitem(sys.modules, "saspy", type(sys)("saspy"))
     assert ss.check_dependencies("iom") == []
+
+
+# ── Windows portability ──────────────────────────────────────────────────
+
+WINDOWS_PATHS = [
+    # C:\Users is where saspy's own jar lives, and \U is a truncated unicode
+    # escape — a hard SyntaxError in the generated config.
+    r"C:\Users\diego\AppData\Roaming\saspy\java\saspyiom.jar",
+    r"C:\temp\SASHome\sas.core.jar",            # \t silently becomes a TAB
+    r"C:\Program Files\SASHome\x.jar",          # \P, \S
+    r"D:\SASHome\new\build\file.jar",           # \n, \b, \f
+]
+
+
+@pytest.mark.parametrize("winpath", WINDOWS_PATHS)
+def test_generated_config_survives_windows_paths(winpath, tmp_path, monkeypatch):
+    """Interpolating a Windows path into a Python string literal corrupts or
+    breaks it; the generator must use repr()."""
+    monkeypatch.setattr(ss, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(ss, "SASCFG", tmp_path / "sascfg_personal.py")
+    p = ss.Profile(name="corp", host="sas.corp", classpath=winpath, java=winpath)
+    cfg = ss.write_sascfg(p)
+    ns: dict = {}
+    exec(compile(cfg.read_text(), str(cfg), "exec"), ns)   # noqa: S102 - our own output
+    assert ns["corp"]["classpath"] == winpath
+    assert ns["corp"]["java"] == winpath
+
+
+def test_generated_config_keeps_the_port_an_int(tmp_path, monkeypatch):
+    monkeypatch.setattr(ss, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(ss, "SASCFG", tmp_path / "sascfg_personal.py")
+    cfg = ss.write_sascfg(ss.Profile(name="c", host="h", port=8591))
+    ns: dict = {}
+    exec(compile(cfg.read_text(), str(cfg), "exec"), ns)   # noqa: S102
+    assert ns["c"]["iomport"] == 8591 and isinstance(ns["c"]["iomport"], int)
+
+
+def test_windows_socket_errors_are_classified(monkeypatch):
+    """Windows reports WSA codes (10051/10065) that the POSIX errno constants
+    do not cover."""
+    for wsa in (10051, 10065):
+        exc = OSError(0, "winsock")
+        exc.winerror = wsa
+        assert sp.classify_socket_error(exc)[0] == "NET_UNREACHABLE", wsa
+
+
+def test_posix_unreachable_errnos_still_classified():
+    import errno as _errno
+    for code in (_errno.ENETUNREACH, _errno.EHOSTUNREACH):
+        assert sp.classify_socket_error(OSError(code, "x"))[0] == "NET_UNREACHABLE"
+
+
+def test_windows_roots_cover_other_drives_and_program_files_x86(monkeypatch):
+    """SASHome is often not on C: at a site install."""
+    monkeypatch.setattr(ss.sys, "platform", "win32")
+    roots = [str(r) for r in ss._sas_roots()]
+    assert any("D:/SASHome" in r for r in roots)
+    assert any("Program Files (x86)/SASHome" in r for r in roots)
+
+
+def test_classpath_separator_follows_the_platform():
+    """';' on Windows, ':' elsewhere — os.pathsep, not a hardcoded colon."""
+    found = {"sas.core": "a.jar", "log4j": "b.jar"}
+    assert ss.build_classpath(found) == f"a.jar{os.pathsep}b.jar"
+
+
+def test_windows_jre_hint_uses_winget(monkeypatch):
+    monkeypatch.setattr(ss.shutil, "which", lambda name: None)
+    monkeypatch.setattr(ss.sys, "platform", "win32")
+    assert "winget" in ss.jre_install_hint()
