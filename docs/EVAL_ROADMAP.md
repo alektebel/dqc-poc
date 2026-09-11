@@ -243,6 +243,53 @@ changed nothing as `suspected_redundancy`.
 Similarity is Jaccard over identifier sets, so reformatting, re-aliasing and
 comment churn do not register as semantic change.
 
+### Surrogate attribution — ContextCite proper, where logprobs exist
+
+There is no need to *train* anything. ContextCite's "surrogate" is a sparse
+linear regression fit **per query** on ~32 ablation samples, thrown away
+afterwards — not a model you train on the guidelines. What it needs is the
+log-probability of a *fixed* response under ablated contexts, and that turns
+out to be available:
+
+| Backend | Teacher-forced logprobs? |
+|---|---|
+| Bedrock / Nova | **No.** `ConverseResponse` has no logprob field at all. |
+| OpenAI-compatible (`REGLLM_API_URL`) | **Yes** — `/v1/completions` with `echo=true` returns `prompt_logprobs`. Verified against `api.nan.builders` (qwen3.6). |
+| Local GGUF (`GGUF_MODEL_PATH`) | **Yes** — llama-cpp-python exposes logprobs, no per-call cost, no rate limit. |
+
+So interpretability does not require changing the production backend: generate
+with Nova, attribute with a scorer that can return logprobs
+(`src/knowledge/logprob_scoring.py`). The caveat is that the attribution then
+describes *that* model's dependence on the context — to make claims about the
+deployed model, generate and score with the same one.
+
+`attribute_by_surrogate` samples random context subsets, scores the fixed
+response under each, and fits an L1 regression whose coefficients are the
+attributions. L1 rather than ridge because attribution should be sparse: most
+units genuinely contribute nothing, and ridge smears small weights across all
+of them. The fit is `fit_lasso`, ~60 lines of coordinate descent in pure
+Python — numpy and scikit-learn are not dependencies of this project and the
+problem is tens of samples by tens of features.
+
+Two advantages over leave-one-out ablation:
+
+- **Cost is fixed by `n_samples`, not by context size.** 32 calls covers all 73
+  dictionary fields, where ablation needs 73. The gap widens with the
+  dictionary.
+- **It sees interactions.** Random subsets expose units that only matter
+  together, which leave-one-out reports as two confident zeros.
+
+A negative coefficient means the unit made the response *less* likely — context
+that argued against what was generated, which is worth surfacing on its own.
+
+### A domain-specialised model is a separate, also-valid idea
+
+Fine-tuning a credit-risk/SQL model is orthogonal to attribution and is already
+scoped in [`POST_TRAINING_ROADMAP.md`](POST_TRAINING_ROADMAP.md). It would help
+generation quality, and a local model would make surrogate attribution free
+rather than metered — but it is not what "surrogate" means in ContextCite, and
+neither depends on the other.
+
 ### Attributing the rule itself to the guidelines
 
 `units_from_reg_chunks` makes EBA GL/2017/16 paragraphs ablatable alongside
@@ -400,6 +447,11 @@ auditor.
 7. Perturbation and grounding (5.4, 5.5), contamination (5.6), human audit (5.7).
 
 ---
+
+## Related
+
+- [`SAS_CONNECTIVITY.md`](SAS_CONNECTIVITY.md) — whether generated DQCs can be
+  submitted to a real SAS server, and the 31 classified failure modes.
 
 ## Open questions for the council
 

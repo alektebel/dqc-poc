@@ -43,6 +43,8 @@ from typing import Callable, Iterable, Sequence
 
 __all__ = [
     "ContextUnit",
+    "fit_lasso",
+    "attribute_by_surrogate",
     "Attribution",
     "AttributionReport",
     "units_from_fields",
@@ -274,5 +276,132 @@ def attribute_by_ablation(
         if a.score <= 0.0 and a.unit.kind == "field" and a.unit.key.upper() in named:
             report.suspected_redundancy.append(a.unit.key)
 
+    report.attributions.sort(key=lambda a: -a.score)
+    return report
+
+
+# ── ContextCite-style surrogate attribution ───────────────────────────────
+#
+# The mechanism above ablates one unit at a time and compares regenerated
+# output. ContextCite proper does something stronger: sample many random
+# context subsets, score the *same fixed response* under each, and fit a
+# sparse linear surrogate whose coefficients are the attributions. Because the
+# response is held constant it measures how much each unit supported the text
+# that was actually produced, and because subsets are random it sees
+# interactions that leave-one-out cannot.
+#
+# It needs per-token log-probabilities of a fixed continuation. Bedrock does
+# not expose them. An OpenAI-compatible endpoint does: /v1/completions with
+# echo=true returns prompt_logprobs, which teacher-forces the response. See
+# src/knowledge/logprob_scoring.py for that adapter.
+
+
+def fit_lasso(X: list[list[float]], y: list[float], *, alpha: float = 0.01,
+              n_iter: int = 1000, tol: float = 1e-6) -> list[float]:
+    """L1-regularised least squares by coordinate descent, in pure Python.
+
+    numpy and scikit-learn are not dependencies of this project, and the
+    problem is tiny — tens of samples by tens of features — so a direct
+    implementation is cheaper than the dependency. Columns are standardised
+    internally and the coefficients are returned on the original scale.
+
+    L1 rather than plain least squares because attribution should be sparse:
+    most context units genuinely contribute nothing, and ridge would spread
+    small weights across all of them.
+    """
+    n, p = len(X), (len(X[0]) if X else 0)
+    if n == 0 or p == 0:
+        return [0.0] * p
+
+    means = [sum(row[j] for row in X) / n for j in range(p)]
+    stds = []
+    for j in range(p):
+        var = sum((row[j] - means[j]) ** 2 for row in X) / n
+        stds.append(var ** 0.5 or 1.0)
+    Z = [[(row[j] - means[j]) / stds[j] for j in range(p)] for row in X]
+
+    y_mean = sum(y) / n
+    r = [y[i] - y_mean for i in range(n)]          # residual, intercept folded out
+    w = [0.0] * p
+    col_sq = [sum(Z[i][j] ** 2 for i in range(n)) or 1.0 for j in range(p)]
+
+    for _ in range(n_iter):
+        delta = 0.0
+        for j in range(p):
+            # Partial residual with feature j removed.
+            rho = sum(Z[i][j] * (r[i] + Z[i][j] * w[j]) for i in range(n))
+            # Soft threshold.
+            thresh = alpha * n
+            if rho > thresh:
+                new = (rho - thresh) / col_sq[j]
+            elif rho < -thresh:
+                new = (rho + thresh) / col_sq[j]
+            else:
+                new = 0.0
+            if new != w[j]:
+                diff = new - w[j]
+                for i in range(n):
+                    r[i] -= Z[i][j] * diff
+                delta = max(delta, abs(diff))
+                w[j] = new
+        if delta < tol:
+            break
+
+    return [w[j] / stds[j] for j in range(p)]
+
+
+def attribute_by_surrogate(
+    units: Sequence[ContextUnit],
+    logprob: Callable[[Sequence[ContextUnit]], float],
+    *,
+    n_samples: int = 32,
+    include_prob: float = 0.5,
+    alpha: float = 0.01,
+    seed: int = 0,
+) -> AttributionReport:
+    """ContextCite: fit a sparse linear surrogate over random context ablations.
+
+    ``logprob`` receives a subset of the units and returns the log-probability
+    of the *fixed* response under that context — the response never changes, so
+    this measures support for the text that was actually generated.
+
+    Costs ``n_samples`` calls regardless of how many units there are, which is
+    why it scales better than leave-one-out on large contexts: 32 calls covers
+    73 dictionary fields, where ablation would need 73.
+
+    A positive coefficient means the unit made the response more likely; a
+    negative one means it argued against it, which is itself worth seeing.
+    """
+    import random
+
+    rng = random.Random(seed)
+    n = len(units)
+    if n == 0:
+        return AttributionReport()
+
+    X: list[list[float]] = []
+    y: list[float] = []
+    # The full context is always sampled, so the surrogate is anchored at the
+    # point the response actually came from.
+    masks = [[1.0] * n]
+    for _ in range(max(0, n_samples - 1)):
+        masks.append([1.0 if rng.random() < include_prob else 0.0 for _ in range(n)])
+
+    report = AttributionReport()
+    for mask in masks:
+        subset = [u for u, keep in zip(units, mask) if keep]
+        X.append(mask)
+        y.append(logprob(subset))
+        report.calls += 1
+
+    weights = fit_lasso(X, y, alpha=alpha)
+    scale = max((abs(w) for w in weights), default=0.0) or 1.0
+    for unit, w in zip(units, weights):
+        report.attributions.append(Attribution(
+            unit=unit,
+            score=w / scale,               # normalised, sign preserved
+            method="surrogate",
+            evidence=(f"raw weight {w:+.4f}" if w else "no measurable effect"),
+        ))
     report.attributions.sort(key=lambda a: -a.score)
     return report
