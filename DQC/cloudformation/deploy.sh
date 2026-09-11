@@ -331,15 +331,39 @@ PIP_LAMBDA_ARGS=(
   --python-version 3.12
   --only-binary=:all:
   --upgrade
+  # With --target, pip still checks its resolution against the *ambient*
+  # site-packages and prints "ERROR: pip's dependency resolver does not
+  # currently take into account all the packages that are installed" for
+  # anything pinned there (a pip-installed awscli is the usual culprit). It
+  # exits 0 and the bundle is correct; the ambient packages are not in it.
+  --no-warn-conflicts
+  # Byte-compiling would use the LOCAL interpreter, burying .pyc files for the
+  # wrong Python version in the bundle. Lambda compiles on first use anyway.
+  --no-compile
 )
+
+# Run pip quietly, but surface the full output if it actually fails.
+pip_install() {
+  local log
+  log=$(mktemp)
+  # shellcheck disable=SC2086
+  if ! $PYTHON_BIN -m pip install "$@" "${PIP_LAMBDA_ARGS[@]}" --quiet > "${log}" 2>&1; then
+    echo ""
+    echo "ERROR: pip install failed:"
+    sed 's/^/    /' "${log}"
+    rm -f "${log}"
+    exit 1
+  fi
+  rm -f "${log}"
+}
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}/lambda-layers/langchain-layer"
 
 echo "==> Building Lambda layer (LangChain + Bedrock)..."
-# shellcheck disable=SC2086
-$PYTHON_BIN -m pip install -r "${SCRIPT_DIR}/lambda-layers/langchain-layer/requirements.txt" \
-  --target "${BUILD_DIR}/lambda-layers/langchain-layer/python" "${PIP_LAMBDA_ARGS[@]}" --quiet
+pip_install -r "${SCRIPT_DIR}/lambda-layers/langchain-layer/requirements.txt" \
+  --target "${BUILD_DIR}/lambda-layers/langchain-layer/python"
+find "${BUILD_DIR}/lambda-layers" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 echo "    Layer built at .build/lambda-layers/langchain-layer/python"
 echo ""
 
@@ -356,11 +380,10 @@ for func_dir in find-fields sql-generator bcbs-classifier; do
 
   # Blank/comment-only requirements mean "everything comes from the layer".
   if [[ -f "${SRC}/requirements.txt" ]] && grep -qE '^[[:space:]]*[^#[:space:]]' "${SRC}/requirements.txt"; then
-    # shellcheck disable=SC2086
-    $PYTHON_BIN -m pip install -r "${SRC}/requirements.txt" \
-      --target "${DEST}" "${PIP_LAMBDA_ARGS[@]}" --quiet
+    pip_install -r "${SRC}/requirements.txt" --target "${DEST}"
   fi
 
+  find "${DEST}" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
   echo "    ${func_dir} staged."
 done
 

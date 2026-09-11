@@ -325,7 +325,16 @@ $pipLambdaArgs = @(
     "--implementation", "cp",
     "--python-version", "3.12",
     "--only-binary=:all:",
-    "--upgrade"
+    "--upgrade",
+    # With --target, pip still checks its resolution against the *ambient*
+    # site-packages and prints "ERROR: pip's dependency resolver does not
+    # currently take into account all the packages that are installed" for
+    # anything pinned there (a pip-installed awscli is the usual culprit). It
+    # exits 0 and the bundle is correct; the ambient packages are not in it.
+    "--no-warn-conflicts",
+    # Byte-compiling would use the LOCAL interpreter, burying .pyc files for the
+    # wrong Python version in the bundle. Lambda compiles on first use anyway.
+    "--no-compile"
 )
 
 if (Test-Path $buildDir) { Remove-Item $buildDir -Recurse -Force }
@@ -339,6 +348,10 @@ if (-not (Test-Path $layerDir)) {
 $layerTarget = Join-Path $buildDir "lambda-layers\langchain-layer\python"
 New-Item -ItemType Directory -Force -Path $layerTarget | Out-Null
 & $pythonExe @pythonPreArgs -m pip install -r (Join-Path $layerDir "requirements.txt") -t $layerTarget @pipLambdaArgs --quiet
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: pip install failed (exit $LASTEXITCODE)." -ForegroundColor Red
+    exit 1
+}
 Write-Host "    Layer built at .build\lambda-layers\langchain-layer\python"
 
 # ── Stage 0b: Build Lambda function bundles ────────────────────────────
@@ -364,8 +377,14 @@ foreach ($funcDir in $funcDirs) {
     $reqFile = Join-Path $funcPath "requirements.txt"
     if ((Test-Path $reqFile) -and (Get-Content $reqFile | Where-Object { $_ -match '^\s*[^#\s]' })) {
         & $pythonExe @pythonPreArgs -m pip install -r $reqFile -t $funcTarget @pipLambdaArgs --quiet
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "ERROR: pip install failed (exit $LASTEXITCODE)." -ForegroundColor Red
+            exit 1
+        }
     }
 
+    Get-ChildItem $funcTarget -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "    $funcDir staged."
 }
 

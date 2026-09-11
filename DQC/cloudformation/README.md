@@ -277,6 +277,14 @@ Update the values with the CloudFormation outputs, then use the API Gateway URLs
 
 ## Troubleshooting
 
+### "ERROR: pip's dependency resolver does not currently take into account..."
+Harmless, and not actually an error — pip exits 0 and the bundle is correct.
+With `--target`, pip still validates its resolution against the *ambient*
+site-packages, so anything pinned there (typically a pip-installed `awscli`
+holding an older `botocore`) is reported as a conflict even though it is not
+part of the Lambda bundle. The scripts pass `--no-warn-conflicts` to silence it.
+A genuine pip failure is now printed in full and aborts the deploy.
+
 ### "No se encontró Python" / "Python was not found"
 On Windows, `WindowsApps\python3.exe` is an app-execution alias that prints this
 and exits, even when a real Python is installed as `python`. The scripts detect
