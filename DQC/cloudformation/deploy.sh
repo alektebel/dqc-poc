@@ -15,15 +15,22 @@
 #   #10 — DynamoDB to store DQCs by project
 #
 # Usage:
-#   ./deploy.sh [--region eu-west-1] [--stack-name dqc-poc] \
+#   ./deploy.sh [--region eu-west-1] [--stack-name dqc-poc] [--with-ecs] \
 #              [--vpc-id vpc-xxx] [--subnet-ids subnet-a,subnet-b] [--destroy] [--confirm]
+#
+# By default this deploys S3 + DynamoDB + the three Lambdas behind API Gateway.
+# That path needs no VPC and no container images.
+#
+# --with-ecs additionally deploys the ECS/ECR/ALB half (Issue #4) that serves the
+# FastAPI backend and DQC Studio UI. Only that half needs a VPC, and its service
+# starts at DesiredCount=0 because the images do not exist until you push them.
 #
 # Prerequisites:
 #   - AWS CLI configured (aws configure or SSO)
 #   - Python 3.11+ (for Lambda layer builds)
-#   - An EXISTING VPC with at least two subnets in different AZs. This script
-#     never creates networking; pass --vpc-id/--subnet-ids if there is no
-#     default VPC, or if you want to target specific subnets.
+#   - Bedrock model access for Nova Micro + Nova Pro in the target region
+#   - --with-ecs only: an EXISTING VPC with 2+ subnets in different AZs. This
+#     script never creates networking.
 
 set -euo pipefail
 
@@ -32,6 +39,7 @@ STACK_NAME="${STACK_NAME:-dqc-poc}"
 AWS_REGION="${AWS_REGION:-eu-west-1}"
 CONFIRM="${CONFIRM:-false}"
 DESTROY="${DESTROY:-false}"
+WITH_ECS="${WITH_ECS:-false}"
 VPC_ID="${VPC_ID:-}"
 SUBNET_CSV="${SUBNET_IDS:-}"
 
@@ -45,6 +53,10 @@ while [[ $# -gt 0 ]]; do
     --stack-name)
       STACK_NAME="$2"
       shift 2
+      ;;
+    --with-ecs)
+      WITH_ECS=true
+      shift
       ;;
     --vpc-id)
       VPC_ID="$2"
@@ -63,20 +75,22 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--region eu-west-1] [--stack-name dqc-poc] \\"
+      echo "Usage: $0 [--region eu-west-1] [--stack-name dqc-poc] [--with-ecs] \\"
       echo "          [--vpc-id vpc-xxx] [--subnet-ids subnet-a,subnet-b] [--destroy] [--confirm]"
       echo ""
       echo "Options:"
       echo "  --region       AWS region (default: eu-west-1)"
       echo "  --stack-name   CloudFormation stack name (default: dqc-poc)"
-      echo "  --vpc-id       Existing VPC to deploy into (default: the account default VPC)"
-      echo "  --subnet-ids   Comma-separated subnets, 2+ in different AZs (default: all in the VPC)"
+      echo "  --with-ecs     Also deploy the ECS/ECR/ALB half (Issue #4). Needs a VPC"
+      echo "                 and container images pushed to ECR. Off by default."
+      echo "  --vpc-id       Existing VPC (--with-ecs only; default: the account default VPC)"
+      echo "  --subnet-ids   Comma-separated subnets, 2+ AZs (--with-ecs only)"
       echo "  --destroy      Destroy the stack instead of deploying"
       echo "  --confirm      Skip confirmation prompt"
       echo "  -h, --help     Show this help"
       echo ""
-      echo "This script never creates a VPC. If the account has no default VPC,"
-      echo "pass --vpc-id and --subnet-ids explicitly."
+      echo "Default (no --with-ecs) deploys S3 + DynamoDB + Lambdas + API Gateway,"
+      echo "which needs no VPC at all. This script never creates a VPC."
       exit 0
       ;;
     *)
@@ -103,71 +117,115 @@ echo "    Region:  ${AWS_REGION}"
 echo "    Stack:   ${STACK_NAME}"
 echo ""
 
-# ── VPC / subnet resolution (never creates networking) ─────────────────
-echo "==> Resolving VPC and subnets..."
+# ── VPC / subnet resolution (never creates networking) ────────────────
+# Only the ECS/ALB half needs a VPC; the Lambda path skips this entirely.
+if [[ "${WITH_ECS}" == "true" ]] && [[ "${DESTROY}" != "true" ]]; then
+  echo "==> Resolving VPC and subnets..."
 
-if [[ -z "${VPC_ID}" ]]; then
-  VPC_ID=$(aws ec2 describe-vpcs \
+  VPC_SOURCE="--vpc-id"
+
+  # 1. A default VPC, if the account has one.
+  if [[ -z "${VPC_ID}" ]]; then
+    VPC_ID=$(aws ec2 describe-vpcs \
+      --region "${AWS_REGION}" \
+      --filters "Name=isDefault,Values=true" \
+      --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "")
+    [[ "${VPC_ID}" == "None" ]] && VPC_ID=""
+    [[ -n "${VPC_ID}" ]] && VPC_SOURCE="default VPC"
+  fi
+
+  # 2. Otherwise auto-select an existing VPC: the one whose subnets cover the
+  #    most AZs, since the ALB needs at least two. Ties break toward the VPC
+  #    with the most public subnets, because the ALB is internet-facing.
+  if [[ -z "${VPC_ID}" ]]; then
+    echo "    No default VPC in ${AWS_REGION}; auto-selecting from existing VPCs..."
+    VPC_ID=$(aws ec2 describe-subnets \
+      --region "${AWS_REGION}" \
+      --query 'Subnets[].[VpcId,AvailabilityZone,MapPublicIpOnLaunch]' \
+      --output text 2>/dev/null \
+      | awk '
+          { azs[$1"|"$2] = 1; if ($3 == "True") pub[$1]++ }
+          END {
+            for (k in azs) { split(k, p, "|"); n[p[1]]++ }
+            for (v in n) printf "%d %d %s\n", n[v], pub[v] + 0, v
+          }' \
+      | sort -k1,1nr -k2,2nr | head -1 | awk '{print $3}')
+    [[ -n "${VPC_ID}" ]] && VPC_SOURCE="auto-selected"
+  fi
+
+  if [[ -z "${VPC_ID}" ]] || [[ "${VPC_ID}" == "None" ]]; then
+    echo ""
+    echo "ERROR: No VPC with subnets found in ${AWS_REGION}, and this script does"
+    echo "       NOT create one. Pass an existing VPC explicitly:"
+    echo ""
+    echo "         $0 --region ${AWS_REGION} --stack-name ${STACK_NAME} --with-ecs \\"
+    echo "            --vpc-id vpc-xxxxxxxx --subnet-ids subnet-aaaa,subnet-bbbb"
+    echo ""
+    echo "       VPCs visible to this identity in ${AWS_REGION}:"
+    aws ec2 describe-vpcs --region "${AWS_REGION}" \
+      --query 'Vpcs[].[VpcId,CidrBlock,IsDefault,Tags[?Key==`Name`]|[0].Value]' \
+      --output table 2>/dev/null || echo "       (ec2:DescribeVpcs denied)"
+    echo ""
+    echo "       Or drop --with-ecs: the Lambdas need no VPC at all."
+    exit 1
+  fi
+
+  # 3. Subnets: one per AZ, preferring public ones (internet-facing ALB).
+  if [[ -z "${SUBNET_CSV}" ]]; then
+    SUBNET_CSV=$(aws ec2 describe-subnets \
+      --region "${AWS_REGION}" \
+      --filters "Name=vpc-id,Values=${VPC_ID}" \
+      --query 'Subnets[].[AvailabilityZone,MapPublicIpOnLaunch,SubnetId]' \
+      --output text 2>/dev/null \
+      | sort -k1,1 -k2,2r | awk '!seen[$1]++ {print $3}' | paste -sd, -)
+  fi
+
+  SUBNET_CSV="${SUBNET_CSV// /}"
+
+  if [[ -z "${SUBNET_CSV}" ]] || [[ "${SUBNET_CSV}" == "None" ]]; then
+    echo "ERROR: No subnets found in VPC ${VPC_ID} (region ${AWS_REGION})."
+    echo "       Pass them explicitly with --subnet-ids subnet-aaaa,subnet-bbbb"
+    exit 1
+  fi
+
+  # 4. Validate: subnets must be in this VPC and span 2+ AZs for the ALB.
+  SUBNET_INFO=$(aws ec2 describe-subnets \
     --region "${AWS_REGION}" \
-    --filters "Name=isDefault,Values=true" \
-    --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "")
-fi
+    --subnet-ids ${SUBNET_CSV//,/ } \
+    --query "Subnets[?VpcId=='${VPC_ID}'].[AvailabilityZone,MapPublicIpOnLaunch]" \
+    --output text 2>/dev/null || echo "")
 
-if [[ -z "${VPC_ID}" ]] || [[ "${VPC_ID}" == "None" ]]; then
+  AZ_COUNT=$(echo "${SUBNET_INFO}" | awk 'NF {print $1}' | sort -u | grep -c . || true)
+  PUBLIC_COUNT=$(echo "${SUBNET_INFO}" | awk '$2 == "True"' | grep -c . || true)
+
+  if [[ "${AZ_COUNT}" -lt 2 ]]; then
+    echo "ERROR: The Application Load Balancer needs subnets in at least 2 AZs."
+    echo "       VPC ${VPC_ID} resolved to: ${SUBNET_CSV} (${AZ_COUNT} AZ)."
+    echo "       Subnets in ${VPC_ID}:"
+    aws ec2 describe-subnets --region "${AWS_REGION}" \
+      --filters "Name=vpc-id,Values=${VPC_ID}" \
+      --query 'Subnets[].[SubnetId,AvailabilityZone,CidrBlock,MapPublicIpOnLaunch]' \
+      --output table 2>/dev/null || true
+    exit 1
+  fi
+
+  echo "    VPC:     ${VPC_ID} (${VPC_SOURCE}, not created by this script)"
+  echo "    Subnets: ${SUBNET_CSV}"
+  echo "    AZs:     ${AZ_COUNT}   Public subnets: ${PUBLIC_COUNT}"
+
+  if [[ "${PUBLIC_COUNT}" -eq 0 ]]; then
+    echo ""
+    echo "    WARNING: none of these subnets auto-assign public IPs. The stack"
+    echo "             creates an internet-facing ALB and Fargate tasks with"
+    echo "             AssignPublicIp=ENABLED, which need public subnets with an"
+    echo "             internet gateway route. Expect the ALB or the image pull"
+    echo "             to fail on private-only subnets."
+  fi
   echo ""
-  echo "ERROR: No VPC specified and no default VPC found in ${AWS_REGION}."
-  echo "       This script does NOT create a VPC. Pass an existing one:"
+else
+  echo "==> Skipping VPC resolution (Lambda-only deploy; pass --with-ecs to include ECS/ALB)."
   echo ""
-  echo "         $0 --region ${AWS_REGION} --stack-name ${STACK_NAME} \\"
-  echo "            --vpc-id vpc-xxxxxxxx --subnet-ids subnet-aaaa,subnet-bbbb"
-  echo ""
-  echo "       VPCs visible to this identity in ${AWS_REGION}:"
-  aws ec2 describe-vpcs --region "${AWS_REGION}" \
-    --query 'Vpcs[].[VpcId,CidrBlock,Tags[?Key==`Name`]|[0].Value]' \
-    --output table 2>/dev/null || echo "       (ec2:DescribeVpcs denied)"
-  exit 1
 fi
-
-if [[ -z "${SUBNET_CSV}" ]]; then
-  # One subnet per AZ, so the ALB gets the 2+ AZs it requires.
-  SUBNET_CSV=$(aws ec2 describe-subnets \
-    --region "${AWS_REGION}" \
-    --filters "Name=vpc-id,Values=${VPC_ID}" \
-    --query 'Subnets[].[AvailabilityZone,SubnetId]' --output text 2>/dev/null \
-    | sort -u -k1,1 | awk '{print $2}' | paste -sd, -)
-fi
-
-SUBNET_CSV="${SUBNET_CSV// /}"
-
-if [[ -z "${SUBNET_CSV}" ]] || [[ "${SUBNET_CSV}" == "None" ]]; then
-  echo "ERROR: No subnets found in VPC ${VPC_ID} (region ${AWS_REGION})."
-  echo "       Pass them explicitly with --subnet-ids subnet-aaaa,subnet-bbbb"
-  exit 1
-fi
-
-# Validate the subnets really are in this VPC and span 2+ AZs (ALB requirement).
-SUBNET_AZS=$(aws ec2 describe-subnets \
-  --region "${AWS_REGION}" \
-  --subnet-ids ${SUBNET_CSV//,/ } \
-  --query "Subnets[?VpcId=='${VPC_ID}'].AvailabilityZone" --output text 2>/dev/null || echo "")
-
-AZ_COUNT=$(echo "${SUBNET_AZS}" | tr '\t' '\n' | sort -u | grep -c . || true)
-
-if [[ "${AZ_COUNT}" -lt 2 ]]; then
-  echo "ERROR: The Application Load Balancer needs subnets in at least 2 AZs."
-  echo "       VPC ${VPC_ID} resolved to: ${SUBNET_CSV} (${AZ_COUNT} AZ)."
-  echo "       Subnets in ${VPC_ID}:"
-  aws ec2 describe-subnets --region "${AWS_REGION}" \
-    --filters "Name=vpc-id,Values=${VPC_ID}" \
-    --query 'Subnets[].[SubnetId,AvailabilityZone,CidrBlock,MapPublicIpOnLaunch]' \
-    --output table 2>/dev/null || true
-  exit 1
-fi
-
-echo "    VPC:     ${VPC_ID} (existing, not created by this script)"
-echo "    Subnets: ${SUBNET_CSV}"
-echo "    AZs:     ${AZ_COUNT}"
-echo ""
 
 # ── Deploy / Destroy ───────────────────────────────────────────────────
 if [[ "${DESTROY}" == "true" ]]; then
@@ -266,6 +324,7 @@ aws cloudformation deploy \
   --parameter-overrides \
     ProjectName="${STACK_NAME}" \
     AWSRegion="${AWS_REGION}" \
+    DeployEcs="${WITH_ECS}" \
     VpcId="${VPC_ID}" \
     SubnetIds="${SUBNET_CSV}" \
     BedrockModelId=eu.amazon.nova-micro-v1:0 \
@@ -363,24 +422,24 @@ echo "============================================================"
 echo ""
 
 echo "  Resources created:"
-echo "  ┌─────────────────────────────────────────────────────────┐"
-echo "  │ Infrastructure (Stage 1):                               │"
-echo "  │   ECS Cluster/Service: ${STACK_NAME}                      │"
-echo "  │   ECR Repos: ${STACK_NAME}-api, ${STACK_NAME}-dqc           │"
-echo "  │   ALB: http://<alb-dns>                                 │"
-echo "  │   S3 Bucket: ${STACK_NAME}-data-${ACCOUNT_ID}              │"
-echo "  │   DynamoDB Table: ${STACK_NAME}-dqc-store                │"
-echo "  │   IAM Roles: ${STACK_NAME}-ecs-exec, ${STACK_NAME}-ecs-task │"
-echo "  └─────────────────────────────────────────────────────────┘"
+echo ""
+echo "  Infrastructure (Stage 1):"
+echo "    S3 Bucket:      ${S3_BUCKET}"
+echo "    DynamoDB Table: ${STACK_NAME}-dqc-store"
+echo "    IAM Role:       ${STACK_NAME}-lambda-exec"
+if [[ "${WITH_ECS}" == "true" ]]; then
+  echo "    ECS Cluster/Service: ${STACK_NAME} (DesiredCount=0 until images are pushed)"
+  echo "    ECR Repos:      ${STACK_NAME}-api, ${STACK_NAME}-dqc"
+  echo "    ALB:            http://<alb-dns>"
+  echo "    IAM Roles:      ${STACK_NAME}-ecs-exec, ${STACK_NAME}-ecs-task"
+fi
 echo ""
 echo "  Serverless (Stage 2):"
-echo "  ┌─────────────────────────────────────────────────────────┐"
-echo "  │   Lambda: ${STACK_NAME}-find-fields          (Issue #7)  │"
-echo "  │   Lambda: ${STACK_NAME}-sql-generator        (Issue #9)  │"
-echo "  │   Lambda: ${STACK_NAME}-bcbs-classifier      (Issue #2)  │"
-echo "  │   API Gateway: ${STACK_NAME}-dqc-api         (Issues #4,#5)│"
-echo "  │   Lambda Layer: ${STACK_NAME}-langchain-layer              │"
-echo "  └─────────────────────────────────────────────────────────┘"
+echo "    Lambda:       ${STACK_NAME}-find-fields      (Issue #7)"
+echo "    Lambda:       ${STACK_NAME}-sql-generator    (Issue #9)"
+echo "    Lambda:       ${STACK_NAME}-bcbs-classifier  (Issue #2)"
+echo "    API Gateway:  ${STACK_NAME}-dqc-api          (Issues #4, #5)"
+echo "    Lambda Layer: ${STACK_NAME}-langchain-layer"
 echo ""
 
 # Get API Gateway URL
@@ -437,32 +496,41 @@ echo ""
 echo "============================================================"
 echo ""
 echo "  Next steps:"
-echo "  ┌─────────────────────────────────────────────────────────┐"
-echo "  │ 1. Copy the .env.example above to .env.local            │"
-echo "  │ 2. Build and push Docker images to ECR:                  │"
-echo "  │    cd ${HOME}/Documents/PwC/dqc-poc                     │"
-echo "  │    docker build -t ${STACK_NAME}-api:latest .            │"
-echo "  │    docker tag ${STACK_NAME}-api:latest ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${STACK_NAME}-api:latest"
-echo "  │    docker push ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${STACK_NAME}-api:latest"
-echo "  │                                                         │"
-echo "  │    docker build -t ${STACK_NAME}-dqc:latest ./DQC/studio/"
-echo "  │    docker tag ${STACK_NAME}-dqc:latest ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${STACK_NAME}-dqc:latest"
-echo "  │    docker push ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${STACK_NAME}-dqc:latest"
-echo "  │                                                         │"
-echo "  │ 3. Force ECS redeploy:                                   │"
-echo "  │    aws ecs update-service \\                               │"
-echo "  │      --cluster ${STACK_NAME} \\                           │"
-echo "  │      --service ${STACK_NAME} \\                           │"
-echo "  │      --force-new-deployment                              │"
-echo "  │                                                         │"
-echo "  │ 4. Test API endpoints:                                   │"
-echo "  │    curl ${API_URL}/health                                │"
-echo "  │    curl -X POST ${API_URL}/fields \\                     │"
-echo "  │      -H 'Content-Type: application/json' \\              │"
-echo "  │      -d '{\"project_id\":\"test\",\"rule\":\"test rule\"}'"
-echo "  │                                                         │"
-echo "  │ 5. Open DQC Studio: http://<ALB_DNS>                    │"
-echo "  └─────────────────────────────────────────────────────────┘"
 echo ""
+echo "  1. Copy the .env block above to .env.local"
+echo ""
+echo "  2. Test the API:"
+echo "       curl ${API_URL}/health"
+echo "       curl -X POST ${API_URL}/fields \\"
+echo "         -H 'Content-Type: application/json' \\"
+echo "         -d '{\"project_id\":\"test\",\"rule\":\"PD_ESTIMADA no puede ser negativa\"}'"
+echo ""
+
+if [[ "${WITH_ECS}" == "true" ]]; then
+  echo "  3. Build and push the container images:"
+  echo "       aws ecr get-login-password --region ${AWS_REGION} \\"
+  echo "         | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+  echo "       docker build -t ${STACK_NAME}-api ."
+  echo "       docker tag ${STACK_NAME}-api ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${STACK_NAME}-api:latest"
+  echo "       docker push ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${STACK_NAME}-api:latest"
+  echo "       docker build -t ${STACK_NAME}-dqc ./DQC/studio/"
+  echo "       docker tag ${STACK_NAME}-dqc ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${STACK_NAME}-dqc:latest"
+  echo "       docker push ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${STACK_NAME}-dqc:latest"
+  echo ""
+  echo "  4. Scale the service up (it was created at DesiredCount=0 so the stack"
+  echo "     could finish before any image existed):"
+  echo "       aws ecs update-service --cluster ${STACK_NAME} --service ${STACK_NAME} \\"
+  echo "         --desired-count 1 --force-new-deployment --region ${AWS_REGION}"
+  echo ""
+  echo "  5. Open DQC Studio at http://<ALB_DNS>"
+  echo ""
+else
+  echo "  The ECS/ECR/ALB half (Issue #4 — FastAPI backend + DQC Studio UI) was"
+  echo "  not deployed. It is not needed for the Lambdas. To add it later:"
+  echo "       ./deploy.sh --region ${AWS_REGION} --stack-name ${STACK_NAME} --with-ecs \\"
+  echo "         --vpc-id vpc-xxxx --subnet-ids subnet-aaaa,subnet-bbbb"
+  echo ""
+fi
+
 echo "  To destroy: ./deploy.sh --destroy --confirm"
 echo "============================================================"

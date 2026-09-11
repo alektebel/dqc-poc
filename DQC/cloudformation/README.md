@@ -60,10 +60,7 @@ DQC/cloudformation/
 1. AWS CLI configured (`aws configure` or `aws configure sso`)
 2. Python 3.11+ (for Lambda layer builds)
 3. IAM permissions to create: ECS, ECR, Lambda, API Gateway, DynamoDB, S3, IAM roles
-4. **An existing VPC with at least two subnets in different AZs.** Neither the
-   templates nor `deploy.sh` create networking — no VPC, subnets, IGW or NAT.
-   The ALB requires 2+ AZs, so a single-subnet VPC is rejected up front.
-5. **Bedrock model access** for Amazon Nova Micro *and* Nova Pro, enabled in the
+4. **Bedrock model access** for Amazon Nova Micro *and* Nova Pro, enabled in the
    target region (console → Bedrock → Model access). Without it every Lambda
    fails with `AccessDeniedException`. The default model ids are the EU
    inference profiles (`eu.amazon.nova-*`), so the region must be an EU one.
@@ -74,28 +71,74 @@ DQC/cloudformation/
 cd DQC/cloudformation
 chmod +x deploy.sh
 
-# Corporate environment — pass the VPC and subnets you were given:
-./deploy.sh --region eu-west-1 --stack-name dqc-poc \
-  --vpc-id vpc-xxxxxxxxxxxxxxxxx \
-  --subnet-ids subnet-xxxx,subnet-yyyy
-
-# If (and only if) the account has a default VPC, they can be omitted and the
-# script will pick one subnet per AZ from it:
+# Default: S3 + DynamoDB + the three Lambdas behind API Gateway.
+# No VPC, no container images, no ECS.
 ./deploy.sh --region eu-west-1 --stack-name dqc-poc
 ```
 
-`--vpc-id` / `--subnet-ids` are also readable from the `VPC_ID` / `SUBNET_IDS`
-environment variables. Windows: `deploy.ps1 -VpcId ... -SubnetIds ...`.
+That is the whole deployment for the Lambda work (Issues #7, #9, #2, #10, #6,
+#5, #1). The Lambda stack imports only `S3BucketName`, `S3BucketArn`,
+`DqcStoreTableName`, `DqcStoreTableArn` and `DqcStoreStreamArn` from stage 1 —
+nothing from ECS, ECR or the ALB.
 
-If no VPC is resolved, the script **exits** and prints the VPCs visible to your
-identity — it never calls `ec2:CreateDefaultVpc`.
+### Adding the container half (Issue #4) — optional
+
+`--with-ecs` additionally deploys ECS Fargate + ECR + ALB, which serve the
+FastAPI backend and the DQC Studio UI. This is the only part that needs a VPC:
+
+```bash
+./deploy.sh --region eu-west-1 --stack-name dqc-poc --with-ecs \
+  --vpc-id vpc-xxxxxxxxxxxxxxxxx \
+  --subnet-ids subnet-xxxx,subnet-yyyy
+```
+
+`--vpc-id` / `--subnet-ids` are also readable from the `VPC_ID` / `SUBNET_IDS`
+environment variables. Windows: `deploy.ps1 -WithEcs -VpcId ... -SubnetIds ...`.
+
+The VPC and subnets are resolved automatically, in this order:
+
+1. `--vpc-id` / `--subnet-ids` if you passed them
+2. the account's **default VPC**, if it has one
+3. otherwise the **existing VPC whose subnets cover the most AZs** (the ALB needs
+   two), breaking ties toward the one with the most public subnets
+
+Subnets are then picked one per AZ, preferring public ones since the ALB is
+internet-facing; the script warns if it could only find private subnets. To see
+what it has to choose from:
+
+```bash
+aws ec2 describe-vpcs --region eu-west-1 \
+  --query 'Vpcs[].[VpcId,CidrBlock,IsDefault,Tags[?Key==`Name`]|[0].Value]' --output table
+
+aws ec2 describe-subnets --region eu-west-1 \
+  --query 'Subnets[].[VpcId,SubnetId,AvailabilityZone,CidrBlock,MapPublicIpOnLaunch]' --output table
+```
+
+If nothing is resolvable the script **exits** and prints that first table for
+you — it never calls `ec2:CreateDefaultVpc`.
+
+The ECS service is created with `EcsDesiredCount=0`, because the task definition
+pulls `:latest` from ECR repos that this same stack creates empty. At
+`DesiredCount: 1` the tasks cannot pull an image, the service never reaches
+steady state, and CloudFormation rolls the whole stack back — taking the S3
+bucket and DynamoDB table with it. So: deploy, push images, then scale up.
+
+```bash
+aws ecr get-login-password --region eu-west-1 \
+  | docker login --username AWS --password-stdin <account>.dkr.ecr.eu-west-1.amazonaws.com
+docker build -t dqc-poc-api . && docker push <account>.dkr.ecr.eu-west-1.amazonaws.com/dqc-poc-api:latest
+docker build -t dqc-poc-dqc ./DQC/studio/ && docker push <account>.dkr.ecr.eu-west-1.amazonaws.com/dqc-poc-dqc:latest
+
+aws ecs update-service --cluster dqc-poc --service dqc-poc \
+  --desired-count 1 --force-new-deployment --region eu-west-1
+```
 
 ### What the deploy does
 
 | Stage | Action |
 |---|---|
 | 0 | Builds the LangChain layer and each function bundle into `.build/`, using `manylinux2014_x86_64` / cp312 wheels so native deps match the Lambda runtime |
-| 1 | `aws cloudformation deploy` of `dqc-infrastructure.yaml` into the VPC you passed |
+| 1 | `aws cloudformation deploy` of `dqc-infrastructure.yaml` (S3 + DynamoDB + IAM; ECS/ECR/ALB only with `--with-ecs`) |
 | 2 | `aws cloudformation package` (uploads `.build/` artifacts to the stack's S3 bucket, rewrites the local paths) then `deploy` of `dqc-serverless.yaml` |
 | 3 | Syncs `data/prompts`, `data/rules` and `data/anonymized` to that same bucket |
 
@@ -111,14 +154,18 @@ over the 50 MB direct-upload limit and precisely why it goes via S3.
 
 ### What Gets Deployed
 
-**Stage 1 — Infrastructure** (`dqc-infrastructure.yaml`):
-- ECS Cluster + Fargate Service (2 containers: API + DQC Studio)
+**Stage 1 — Infrastructure** (`dqc-infrastructure.yaml`), always:
+- S3 bucket (versioned, encrypted, lifecycle policies)
+- DynamoDB table (PK: `report_id` = project, SK: `report_sort` = dqc_id) with
+  a `NEW_AND_OLD_IMAGES` stream and the `DqcStatusIndex` GSI
+- IAM role for Lambda execution
+
+Only with `--with-ecs` (`DeployEcs=true`):
+- ECS Cluster + Fargate Service (2 containers: API + DQC Studio), `DesiredCount=0`
 - ECR repositories (`dqc-poc-api`, `dqc-poc-dqc`)
 - Application Load Balancer (HTTP, internet-facing)
-- S3 bucket (versioned, encrypted, lifecycle policies)
-- DynamoDB table (PK: `report_id` = project, SK: `report_sort` = dqc_id)
 - CloudWatch log group + alarms
-- IAM roles (ECS exec, ECS task, Lambda execution)
+- IAM roles (ECS exec, ECS task)
 - Security groups (ALB, ECS task)
 
 **Stage 2 — Serverless** (`dqc-serverless.yaml`):
@@ -243,8 +290,8 @@ Enable Amazon Nova Micro/Pro in Bedrock → Model Access in the AWS console.
 The stack requires `CAPABILITY_IAM` and `CAPABILITY_NAMED_IAM` — this is normal for CloudFormation that creates IAM roles.
 
 ### VPC/subnet issues
-The deploy script never creates networking. Pass `--vpc-id` and `--subnet-ids`
-explicitly. The subnets must be in the given VPC and span at least two AZs, or
+Only `--with-ecs` needs a VPC — the Lambda deployment does not. The deploy script
+never creates networking, so pass `--vpc-id` and `--subnet-ids` explicitly. The subnets must be in the given VPC and span at least two AZs, or
 the ALB cannot be created — the script checks this before touching CloudFormation.
 
 ### Lambda timeout

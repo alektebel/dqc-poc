@@ -1,9 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  DQC PoC — Core infrastructure (ECS, ECR, ALB, DynamoDB, S3, IAM).
-  Requires an existing VPC and subnets: this stack never creates networking.
+  DQC PoC — Core infrastructure (S3, DynamoDB, IAM; optionally ECS/ECR/ALB).
   Issue #6: S3 bucket for data/prompts/rules.
   Issue #10: DynamoDB for DQC store (PK: report_id=project, SK: report_sort=dqc_id).
+  The ECS/ECR/ALB half (Issue #4) is opt-in via DeployEcs=true and is the only
+  part that needs a VPC. This stack never creates networking.
 
 Parameters:
   ProjectName:
@@ -12,10 +13,30 @@ Parameters:
   AWSRegion:
     Type: String
     Default: eu-west-1
+  DeployEcs:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Deploy the ECS/ECR/ALB half (Issue #4). Off by default: the Lambda stack
+      needs only S3 + DynamoDB, and the ECS service cannot reach steady state
+      until container images exist in ECR. Requires VpcId and SubnetIds.
+  EcsDesiredCount:
+    Type: Number
+    Default: 0
+    Description: >-
+      Tasks to run. Left at 0 so the stack creates before any image has been
+      pushed; scale up with `aws ecs update-service --desired-count 1` once the
+      images are in ECR.
   VpcId:
-    Type: AWS::EC2::VPC::Id
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^vpc-[0-9a-fA-F]{8}([0-9a-fA-F]{9})?$'
+    Description: Existing VPC. Required only when DeployEcs is true.
   SubnetIds:
     Type: CommaDelimitedList
+    Default: ''
+    Description: Existing subnets, 2+ AZs. Required only when DeployEcs is true.
   BedrockModelId:
     Type: String
     Default: eu.amazon.nova-micro-v1:0
@@ -25,6 +46,9 @@ Parameters:
   MemoryMiB:
     Type: Number
     Default: 4096
+
+Conditions:
+  WithEcs: !Equals [!Ref DeployEcs, 'true']
 
 Resources:
   # ── S3 Bucket (Issue #6) ──
@@ -142,6 +166,7 @@ Resources:
   # ── IAM: ECS execution role ──
   EcsExecRole:
     Type: AWS::IAM::Role
+    Condition: WithEcs
     Properties:
       RoleName: !Sub "${ProjectName}-ecs-exec"
       AssumeRolePolicyDocument:
@@ -167,6 +192,7 @@ Resources:
   # ── IAM: ECS task role ──
   EcsTaskRole:
     Type: AWS::IAM::Role
+    Condition: WithEcs
     Properties:
       RoleName: !Sub "${ProjectName}-ecs-task"
       AssumeRolePolicyDocument:
@@ -200,12 +226,14 @@ Resources:
   # ── ECS Cluster ──
   DqcEcsCluster:
     Type: AWS::ECS::Cluster
+    Condition: WithEcs
     Properties:
       ClusterName: !Ref ProjectName
 
   # ── ECR Repositories ──
   DqcECRApi:
     Type: AWS::ECR::Repository
+    Condition: WithEcs
     Properties:
       RepositoryName: !Sub "${ProjectName}-api"
       ImageTagMutability: MUTABLE
@@ -213,6 +241,7 @@ Resources:
 
   DqcECRDqc:
     Type: AWS::ECR::Repository
+    Condition: WithEcs
     Properties:
       RepositoryName: !Sub "${ProjectName}-dqc"
       ImageTagMutability: MUTABLE
@@ -221,6 +250,11 @@ Resources:
   # ── Security Groups ──
   DqcAlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    Metadata:
+      # VpcId/SubnetIds default to '' for the DeployEcs=false path,
+      # where this resource is not created at all.
+      cfn-lint: { config: { ignore_checks: [W1030] } }
+    Condition: WithEcs
     Properties:
       GroupDescription: Security group for DQC ALB
       VpcId: !Ref VpcId
@@ -235,6 +269,11 @@ Resources:
 
   DqcTaskSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+    Metadata:
+      # VpcId/SubnetIds default to '' for the DeployEcs=false path,
+      # where this resource is not created at all.
+      cfn-lint: { config: { ignore_checks: [W1030] } }
+    Condition: WithEcs
     Properties:
       GroupDescription: Security group for DQC ECS tasks
       VpcId: !Ref VpcId
@@ -254,6 +293,7 @@ Resources:
   # ── CloudWatch Log Group ──
   DqcCloudWatchLogGroup:
     Type: AWS::Logs::LogGroup
+    Condition: WithEcs
     Properties:
       LogGroupName: !Sub "/ecs/${ProjectName}"
       RetentionInDays: 14
@@ -261,6 +301,11 @@ Resources:
   # ── Application Load Balancer ──
   DqcAlb:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Metadata:
+      # VpcId/SubnetIds default to '' for the DeployEcs=false path,
+      # where this resource is not created at all.
+      cfn-lint: { config: { ignore_checks: [W1030] } }
+    Condition: WithEcs
     Properties:
       Name: !Ref ProjectName
       Scheme: internet-facing
@@ -270,6 +315,11 @@ Resources:
 
   DqcTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Metadata:
+      # VpcId/SubnetIds default to '' for the DeployEcs=false path,
+      # where this resource is not created at all.
+      cfn-lint: { config: { ignore_checks: [W1030] } }
+    Condition: WithEcs
     Properties:
       TargetType: ip
       Name: !Sub "${ProjectName}-tg"
@@ -280,6 +330,7 @@ Resources:
 
   DqcListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: WithEcs
     Properties:
       LoadBalancerArn: !Ref DqcAlb
       Port: 80
@@ -291,6 +342,7 @@ Resources:
   # ── ECS Task Definition ──
   DqcTaskDefinition:
     Type: AWS::ECS::TaskDefinition
+    Condition: WithEcs
     Properties:
       Family: !Ref ProjectName
       NetworkMode: awsvpc
@@ -342,13 +394,18 @@ Resources:
   # ── ECS Service ──
   DqcService:
     Type: AWS::ECS::Service
+    Metadata:
+      # VpcId/SubnetIds default to '' for the DeployEcs=false path,
+      # where this resource is not created at all.
+      cfn-lint: { config: { ignore_checks: [W1030] } }
+    Condition: WithEcs
     DependsOn:
       - DqcListener
     Properties:
       ServiceName: !Ref ProjectName
       Cluster: !Ref DqcEcsCluster
       TaskDefinition: !Ref DqcTaskDefinition
-      DesiredCount: 1
+      DesiredCount: !Ref EcsDesiredCount
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
@@ -363,6 +420,7 @@ Resources:
   # ── CloudWatch Alarms ──
   DqcTaskErrorAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: WithEcs
     Properties:
       AlarmName: !Sub "${ProjectName}-task-errors"
       AlarmDescription: Alarm when ECS task has errors
@@ -379,6 +437,7 @@ Resources:
 
   DqcTaskLatencyAlarm:
     Type: AWS::CloudWatch::Alarm
+    Condition: WithEcs
     Properties:
       AlarmName: !Sub "${ProjectName}-task-latency"
       AlarmDescription: Alarm when ECS task latency exceeds 5s
@@ -417,26 +476,32 @@ Outputs:
     Export: { Name: !Sub "${ProjectName}-S3BucketArn" }
 
   DqcApiUri:
+    Condition: WithEcs
     Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/${ProjectName}-api"
     Export: { Name: !Sub "${ProjectName}-EcrApiUri" }
 
   DqcDqcUri:
+    Condition: WithEcs
     Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWSRegion}.amazonaws.com/${ProjectName}-dqc"
     Export: { Name: !Sub "${ProjectName}-EcrDqcUri" }
 
   EcsClusterName:
+    Condition: WithEcs
     Value: !Ref DqcEcsCluster
     Export: { Name: !Sub "${ProjectName}-EcsClusterName" }
 
   EcsServiceName:
+    Condition: WithEcs
     Value: !Ref DqcService
     Export: { Name: !Sub "${ProjectName}-EcsServiceName" }
 
   AlbDns:
+    Condition: WithEcs
     Value: !GetAtt DqcAlb.DNSName
     Export: { Name: !Sub "${ProjectName}-AlbDns" }
 
   AlbUrl:
+    Condition: WithEcs
     Value: !Sub "http://${DqcAlb.DNSName}"
     Export: { Name: !Sub "${ProjectName}-AlbHttps" }
 

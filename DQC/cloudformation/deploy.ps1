@@ -21,10 +21,16 @@
 .EXAMPLE
     .\deploy.ps1 -Region eu-west-1 -StackName dqc-poc
     .\deploy.ps1 -Destroy -Confirm
-    .\deploy.ps1 -Region eu-west-1 -StackName my-dqc -VpcId vpc-xxxx -SubnetIds subnet-aaaa,subnet-bbbb
+    .\deploy.ps1 -Region eu-west-1 -StackName my-dqc
 
-    Requires an EXISTING VPC with 2+ subnets in different AZs. This script
-    never creates networking.
+    Deploys S3 + DynamoDB + the three Lambdas behind API Gateway. No VPC and no
+    container images are needed for that path.
+
+    .\deploy.ps1 -Region eu-west-1 -StackName my-dqc -WithEcs ``
+        -VpcId vpc-xxxx -SubnetIds subnet-aaaa,subnet-bbbb
+
+    Adds the ECS/ECR/ALB half (Issue #4). Requires an EXISTING VPC with 2+
+    subnets in different AZs. This script never creates networking.
 #>
 [CmdletBinding()]
 param(
@@ -44,7 +50,9 @@ param(
     [string] $VpcId = "",
 
     [Parameter(Mandatory = $false)]
-    [string] $SubnetIds = ""
+    [string] $SubnetIds = "",
+
+    [switch] $WithEcs
 )
 
 $ErrorActionPreference = "Stop"
@@ -97,9 +105,13 @@ Write-Host "    Account: $($account.PadRight(12))  Region: $($Region.PadRight(12
 Write-Host ""
 
 # ── VPC / subnet resolution (never creates networking) ────────────────
-if (-not $Destroy) {
+# Only the ECS/ALB half needs a VPC; the Lambda path skips this entirely.
+if ($WithEcs -and -not $Destroy) {
     Write-Step "Resolving VPC and subnets..."
 
+    $vpcSource = "-VpcId"
+
+    # 1. A default VPC, if the account has one.
     if (-not $VpcId) {
         try {
             $VpcId = aws ec2 describe-vpcs `
@@ -107,60 +119,85 @@ if (-not $Destroy) {
                 --filters "Name=isDefault,Values=true" `
                 --query 'Vpcs[0].VpcId' --output text 2>$null
         } catch { $VpcId = "" }
+        if ($VpcId -eq "None") { $VpcId = "" }
+        if ($VpcId) { $vpcSource = "default VPC" }
+    }
+
+    # Subnet inventory for the region, reused for selection and validation.
+    $allSubnets = @()
+    try {
+        $rows = aws ec2 describe-subnets `
+            --region $Region `
+            --query 'Subnets[].[VpcId,AvailabilityZone,MapPublicIpOnLaunch,SubnetId]' `
+            --output text 2>$null
+        $allSubnets = @($rows -split "`n" | Where-Object { $_.Trim() } | ForEach-Object {
+            $p = $_ -split "`t"
+            [PSCustomObject]@{
+                VpcId    = $p[0]
+                AZ       = $p[1]
+                IsPublic = ($p[2] -eq "True")
+                SubnetId = $p[3]
+            }
+        })
+    } catch { $allSubnets = @() }
+
+    # 2. Otherwise auto-select: the VPC whose subnets cover the most AZs, since
+    #    the ALB needs at least two. Ties break toward the most public subnets.
+    if (-not $VpcId) {
+        Write-Host "    No default VPC in $($Region); auto-selecting from existing VPCs..."
+        $best = $allSubnets | Group-Object VpcId | ForEach-Object {
+            [PSCustomObject]@{
+                VpcId     = $_.Name
+                AzCount   = ($_.Group | Select-Object -ExpandProperty AZ -Unique).Count
+                PubCount  = ($_.Group | Where-Object IsPublic).Count
+            }
+        } | Sort-Object AzCount, PubCount -Descending | Select-Object -First 1
+
+        if ($best) { $VpcId = $best.VpcId; $vpcSource = "auto-selected" }
     }
 
     if (-not $VpcId -or $VpcId -eq "None") {
         Write-Host ""
-        Write-Host "ERROR: No VPC specified and no default VPC found in $($Region)." -ForegroundColor Red
-        Write-Host "       This script does NOT create a VPC. Pass an existing one:" -ForegroundColor Red
+        Write-Host "ERROR: No VPC with subnets found in $($Region), and this script does" -ForegroundColor Red
+        Write-Host "       NOT create one. Pass an existing VPC explicitly:" -ForegroundColor Red
         Write-Host ""
-        Write-Host "         .\deploy.ps1 -Region $Region -StackName $StackName ``" -ForegroundColor Yellow
+        Write-Host "         .\deploy.ps1 -Region $Region -StackName $StackName -WithEcs ``" -ForegroundColor Yellow
         Write-Host "            -VpcId vpc-xxxxxxxx -SubnetIds subnet-aaaa,subnet-bbbb" -ForegroundColor Yellow
         Write-Host ""
         Write-Host "       VPCs visible to this identity in $($Region):" -ForegroundColor Red
         aws ec2 describe-vpcs --region $Region `
-            --query 'Vpcs[].[VpcId,CidrBlock,Tags[?Key==`Name`]|[0].Value]' `
+            --query 'Vpcs[].[VpcId,CidrBlock,IsDefault,Tags[?Key==`Name`]|[0].Value]' `
             --output table 2>$null
+        Write-Host ""
+        Write-Host "       Or drop -WithEcs: the Lambdas need no VPC at all." -ForegroundColor Yellow
         exit 1
     }
 
+    # 3. Subnets: one per AZ, preferring public ones (internet-facing ALB).
     if (-not $SubnetIds) {
-        # One subnet per AZ, so the ALB gets the 2+ AZs it requires.
-        try {
-            $subnetRows = aws ec2 describe-subnets `
-                --region $Region `
-                --filters "Name=vpc-id,Values=$VpcId" `
-                --query 'Subnets[].[AvailabilityZone,SubnetId]' --output text 2>$null
-            $pairs = @($subnetRows -split "`n" | Where-Object { $_.Trim() } | ForEach-Object {
-                $parts = $_ -split "`t"
-                [PSCustomObject]@{ AZ = $parts[0]; SubnetId = $parts[1] }
-            })
-            $subnets = @($pairs | Group-Object AZ | ForEach-Object { $_.Group[0].SubnetId })
-        } catch { $subnets = @() }
-
-        if ($subnets.Count -eq 0) {
-            Write-Host "ERROR: No subnets found in VPC $($VpcId) (region $($Region))." -ForegroundColor Red
-            Write-Host "       Pass them explicitly with -SubnetIds subnet-aaaa,subnet-bbbb" -ForegroundColor Red
-            exit 1
-        }
-        $SubnetIds = ($subnets -join ",")
+        $picked = $allSubnets | Where-Object { $_.VpcId -eq $VpcId } |
+            Group-Object AZ | ForEach-Object {
+                ($_.Group | Sort-Object IsPublic -Descending | Select-Object -First 1).SubnetId
+            }
+        $SubnetIds = (@($picked) -join ",")
     }
 
     $SubnetIds = $SubnetIds -replace "\s", ""
 
-    # Validate the subnets really are in this VPC and span 2+ AZs (ALB requirement).
-    $azList = @()
-    try {
-        $azRaw = aws ec2 describe-subnets `
-            --region $Region `
-            --subnet-ids ($SubnetIds -split ",") `
-            --query "Subnets[?VpcId=='$VpcId'].AvailabilityZone" --output text 2>$null
-        $azList = @($azRaw -split "[`t`n ]" | Where-Object { $_ } | Select-Object -Unique)
-    } catch { $azList = @() }
+    if (-not $SubnetIds) {
+        Write-Host "ERROR: No subnets found in VPC $($VpcId) (region $($Region))." -ForegroundColor Red
+        Write-Host "       Pass them explicitly with -SubnetIds subnet-aaaa,subnet-bbbb" -ForegroundColor Red
+        exit 1
+    }
 
-    if ($azList.Count -lt 2) {
+    # 4. Validate: subnets must be in this VPC and span 2+ AZs for the ALB.
+    $chosen = @($allSubnets | Where-Object { $_.VpcId -eq $VpcId -and ($SubnetIds -split ",") -contains $_.SubnetId })
+    $azCount = ($chosen | Select-Object -ExpandProperty AZ -Unique).Count
+    $publicCount = ($chosen | Where-Object IsPublic).Count
+
+    if ($azCount -lt 2) {
         Write-Host "ERROR: The Application Load Balancer needs subnets in at least 2 AZs." -ForegroundColor Red
-        Write-Host "       VPC $($VpcId) resolved to: $($SubnetIds) ($($azList.Count) AZ)." -ForegroundColor Red
+        Write-Host "       VPC $($VpcId) resolved to: $($SubnetIds) ($($azCount) AZ)." -ForegroundColor Red
         Write-Host "       Subnets in $($VpcId):" -ForegroundColor Red
         aws ec2 describe-subnets --region $Region `
             --filters "Name=vpc-id,Values=$VpcId" `
@@ -169,9 +206,17 @@ if (-not $Destroy) {
         exit 1
     }
 
-    Write-Host "    VPC:     $($VpcId) (existing, not created by this script)"
+    Write-Host "    VPC:     $($VpcId) ($($vpcSource), not created by this script)"
     Write-Host "    Subnets: $($SubnetIds)"
-    Write-Host "    AZs:     $($azList.Count)"
+    Write-Host "    AZs:     $($azCount)   Public subnets: $($publicCount)"
+
+    if ($publicCount -eq 0) {
+        Write-Host ""
+        Write-Host "    WARNING: none of these subnets auto-assign public IPs. The stack" -ForegroundColor Yellow
+        Write-Host "             creates an internet-facing ALB and Fargate tasks with" -ForegroundColor Yellow
+        Write-Host "             AssignPublicIp=ENABLED, which need public subnets with an" -ForegroundColor Yellow
+        Write-Host "             internet gateway route." -ForegroundColor Yellow
+    }
     Write-Host ""
 }
 
@@ -272,6 +317,7 @@ $infraArgs = @(
     "--parameter-overrides",
         "ProjectName=$StackName",
         "AWSRegion=$Region",
+        "DeployEcs=$(if ($WithEcs) { 'true' } else { 'false' })",
         "VpcId=$VpcId",
         "SubnetIds=$SubnetIds",
         "BedrockModelId=eu.amazon.nova-micro-v1:0",
