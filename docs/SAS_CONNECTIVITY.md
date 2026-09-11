@@ -115,13 +115,28 @@ interpolated into a string literal. `C:\temp\...` silently becomes a TAB and
 
 ### Windows prerequisites, in order
 
-| # | What | How | Needed for |
-|---|---|---|---|
-| 1 | **Python 3.9+** | python.org or `winget install Python.Python.3.12` | everything |
-| 2 | **Java 11 JRE** | `winget install EclipseAdoptium.Temurin.11.JRE` | saspy IOM only |
-| 3 | **saspy** | `pip install saspy` | saspy IOM only |
-| 4 | **SAS client jars** | from a SAS client installation — **not installable**, see above | saspy IOM only |
-| 5 | **Network route to the IOM port** | — | saspy IOM only, and see Citrix below |
+| # | What | Chocolatey | winget | Needed for |
+|---|---|---|---|---|
+| 1 | **Python 3.9+** | `choco install python312 -y` | `winget install Python.Python.3.12` | everything |
+| 2 | **Java 11 JRE** | `choco install temurin11 -y` | `winget install EclipseAdoptium.Temurin.11.JRE` | saspy IOM only |
+| 3 | **saspy** | `pip install saspy` | `pip install saspy` | saspy IOM only |
+| 4 | **SAS client jars** | — **not installable**, they come from a SAS client installation (see above) | | saspy IOM only |
+| 5 | **Network route to the IOM port** | — | | saspy IOM only, and see Citrix below |
+
+Both in one elevated shell:
+
+```powershell
+choco install python312 temurin11 -y
+refreshenv
+pip install saspy
+```
+
+`choco` needs an **Administrator** shell; `winget` and `scoop` generally do not.
+On a managed corporate machine Chocolatey is usually the sanctioned route even
+when winget is present, which is why the setup script prefers it when both
+exist. Package naming moves around — `choco search temurin` lists the current
+JDK and JRE variants if `temurin11` is not found. `scoop` is the no-admin
+alternative: `scoop bucket add java && scoop install temurin11-jre`.
 
 Turn off the Microsoft Store Python aliases (Settings → Apps → App execution
 aliases → `python.exe` / `python3.exe`), or `python3` resolves to a stub that

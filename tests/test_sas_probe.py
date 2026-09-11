@@ -258,6 +258,9 @@ def test_jre_hint_matches_the_available_package_manager(monkeypatch):
     """A generic 'apt install default-jre' is wrong on most machines; the hint
     has to name the tool that is actually present."""
     cases = [("mise", "mise use -g java@temurin-"),
+             ("choco", "choco install temurin"),
+             ("scoop", "scoop install temurin"),
+             ("winget", "winget install EclipseAdoptium.Temurin."),
              ("pacman", "pacman -S jre"),
              ("apt", "apt install openjdk-"),
              ("dnf", "dnf install java-"),
@@ -442,3 +445,33 @@ def test_a_named_client_without_sessionname_is_still_remote(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("CLIENTNAME", "LAPTOP01")
     assert ss.session_context()["kind"] == "remote"
+
+
+def test_chocolatey_hint_says_it_needs_administrator(monkeypatch):
+    """choco install requires an elevated shell; saying so up front saves a
+    confusing 'Access denied' on a managed machine."""
+    monkeypatch.setattr(ss.shutil, "which",
+                        lambda n: "/x" if n == "choco" else None)
+    hint = ss.jre_install_hint()
+    assert "Administrator" in hint
+    assert f"temurin{ss.JRE_TARGET}" in hint
+
+
+def test_chocolatey_is_preferred_over_winget_when_both_exist(monkeypatch):
+    """A machine with Chocolatey is usually one where Chocolatey is the
+    sanctioned route, even though winget is also present."""
+    monkeypatch.setattr(ss.shutil, "which",
+                        lambda n: "/x" if n in ("choco", "winget") else None)
+    assert ss.jre_install_hint().startswith("choco install")
+
+
+def test_winget_hint_still_mentions_choco_as_the_alternative(monkeypatch):
+    monkeypatch.setattr(ss.shutil, "which",
+                        lambda n: "/x" if n == "winget" else None)
+    assert "choco install" in ss.jre_install_hint()
+
+
+def test_scoop_is_offered_as_the_no_admin_windows_route(monkeypatch):
+    monkeypatch.setattr(ss.shutil, "which",
+                        lambda n: "/x" if n == "scoop" else None)
+    assert "no admin" in ss.jre_install_hint()

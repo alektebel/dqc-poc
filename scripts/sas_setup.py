@@ -145,10 +145,21 @@ JRE_TARGET = "11"
 
 
 def jre_install_hint() -> str:
-    """The command that actually works on THIS machine."""
+    """The command that actually works on THIS machine.
+
+    Ordered by what is present, not by preference: a machine that has
+    Chocolatey is usually a managed one where Chocolatey is the sanctioned
+    route, even though winget may also exist.
+    """
     if shutil.which("mise"):
         return (f"mise use -g java@temurin-{JRE_TARGET}"
-                f"   (no sudo; mise is already on this machine)")
+                f"   (no admin; mise is already on this machine)")
+    if shutil.which("choco"):
+        return (f"choco install temurin{JRE_TARGET} -y"
+                f"   (run as Administrator; `choco search temurin` for variants)")
+    if shutil.which("scoop"):
+        return (f"scoop bucket add java && scoop install temurin{JRE_TARGET}-jre"
+                f"   (no admin)")
     if shutil.which("pacman"):
         return (f"sudo pacman -S jre{JRE_TARGET}-openjdk"
                 f"   (NOT 'jre-openjdk' — that is Java 26, too new for SAS 9.4)")
@@ -158,9 +169,9 @@ def jre_install_hint() -> str:
         return f"sudo dnf install java-{JRE_TARGET}-openjdk-headless"
     if shutil.which("brew"):
         return f"brew install --cask temurin@{JRE_TARGET}"
-    if sys.platform == "win32":
+    if shutil.which("winget") or sys.platform == "win32":
         return (f"winget install EclipseAdoptium.Temurin.{JRE_TARGET}.JRE"
-                f"   (or download from adoptium.net)")
+                f"   (or: choco install temurin{JRE_TARGET} -y, or adoptium.net)")
     return f"install a Java {JRE_TARGET} runtime (adoptium.net)"
 
 
