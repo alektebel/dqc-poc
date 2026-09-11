@@ -122,3 +122,68 @@ def test_failed_collects_every_independent_failure():
     probe.add("dependency", "DEP_MISSING")
     probe.add("tcp", "NET_DNS")
     assert [r.code for r in probe.failed] == ["DEP_MISSING", "NET_DNS"]
+
+
+# ── setup wizard ─────────────────────────────────────────────────────────
+
+import sas_setup as ss  # noqa: E402
+
+
+def test_profile_never_carries_a_password_field():
+    """Passwords come from SAS_PASSWORD or a prompt; they must not be
+    persistable, so the dataclass has no slot for one."""
+    assert "password" not in ss.Profile().to_dict()
+    assert "token" not in ss.Profile().to_dict()
+
+
+def test_profiles_and_config_are_written_private(tmp_path, monkeypatch):
+    monkeypatch.setattr(ss, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(ss, "PROFILES", tmp_path / "sas_profiles.json")
+    monkeypatch.setattr(ss, "SASCFG", tmp_path / "sascfg_personal.py")
+    p = ss.Profile(name="corp", host="sas.corp", port=8591, user="me")
+    ss.save_profile(p)
+    cfg = ss.write_sascfg(p)
+    assert (tmp_path / "sas_profiles.json").stat().st_mode & 0o077 == 0
+    assert cfg.stat().st_mode & 0o077 == 0
+
+
+def test_generated_sascfg_is_the_module_saspy_expects(tmp_path, monkeypatch):
+    monkeypatch.setattr(ss, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(ss, "SASCFG", tmp_path / "sascfg_personal.py")
+    cfg = ss.write_sascfg(ss.Profile(name="corp", host="sas.corp", port=8591))
+    ns: dict = {}
+    exec(compile(cfg.read_text(), str(cfg), "exec"), ns)   # noqa: S102 - our own output
+    assert ns["SAS_config_names"] == ["corp"]
+    assert ns["corp"]["iomhost"] == "sas.corp"
+    assert ns["corp"]["iomport"] == 8591
+
+
+def test_round_trips_a_saved_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(ss, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(ss, "PROFILES", tmp_path / "sas_profiles.json")
+    ss.save_profile(ss.Profile(name="a", host="h1"))
+    ss.save_profile(ss.Profile(name="b", host="h2"))
+    saved = ss.load_profiles()
+    assert saved["a"]["host"] == "h1" and saved["b"]["host"] == "h2"
+
+
+def test_corrupt_profile_file_does_not_crash(tmp_path, monkeypatch):
+    bad = tmp_path / "sas_profiles.json"
+    bad.write_text("{not json")
+    monkeypatch.setattr(ss, "PROFILES", bad)
+    assert ss.load_profiles() == {}
+
+
+def test_missing_dependencies_are_reported_as_install_commands():
+    missing = ss.check_dependencies("iom")
+    # saspy is not a dependency of this project, so this must be non-empty here
+    assert any("saspy" in m for m in missing)
+    assert all(m.startswith(("pip install", "install")) for m in missing)
+
+
+def test_ask_takes_the_default_without_a_terminal(monkeypatch):
+    """input() and getpass block forever under CI or a pipe; the wizard must
+    fall through to defaults instead of hanging."""
+    monkeypatch.setattr(ss.sys.stdin, "isatty", lambda: False)
+    assert ss.ask("Host", "sas.corp") == "sas.corp"
+    assert ss.ask("Host", "") == ""

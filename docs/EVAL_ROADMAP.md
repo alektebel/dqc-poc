@@ -243,6 +243,36 @@ changed nothing as `suspected_redundancy`.
 Similarity is Jaccard over identifier sets, so reformatting, re-aliasing and
 comment churn do not register as semantic change.
 
+### The cheap tier — free, and it was already in the data
+
+Before paying for any ablation, two provenance signals already exist and were
+both being discarded:
+
+**1. The model already declares its inputs.** Every generated DQC carries
+`campos_entrada`, and nothing has ever checked it. `reconcile_claimed_fields`
+compares that declaration against the identifiers actually in the SQL:
+
+| | meaning |
+|---|---|
+| `confirmed` | declared and present — the account holds up |
+| `unsupported_claim` | declared but **absent from the query** — the model justified itself with a field it never acted on. This is the shape of hallucinated grounding. |
+| `undeclared_use` | present but not declared — the account is incomplete |
+
+Reported as `claim_precision` and `claim_recall` rather than one number,
+because they are different failures: claiming three fields and using one is a
+hallucination signal, using three and claiming one is only incompleteness.
+Zero model calls.
+
+**2. The retriever already scored every field.** `select_relevant_fields`
+computed a relevance score per field and threw it away, returning only the
+selection. Split out as `rank_fields`, that score now answers "why was this
+field in the prompt at all" — also free.
+
+Both feed the `atribucion` trace step, so the decision tree now marks the step
+`no` when the model claimed a field it did not use. **Start here.** Structural
+attribution plus these two covers most of what you want to see, at no cost, and
+narrows any later ablation to the handful of fields the query actually names.
+
 ### Surrogate attribution — ContextCite proper, where logprobs exist
 
 There is no need to *train* anything. ContextCite's "surrogate" is a sparse
@@ -270,6 +300,12 @@ units genuinely contribute nothing, and ridge smears small weights across all
 of them. The fit is `fit_lasso`, ~60 lines of coordinate descent in pure
 Python — numpy and scikit-learn are not dependencies of this project and the
 problem is tens of samples by tens of features.
+
+**On cost.** For a 73-field dictionary: structural attribution and
+reconciliation are 0 calls, surrogate is ~32, leave-one-out is 73. If 32 is
+still too many, run leave-one-out over only the fields the SQL names — usually
+3–5 — which answers "did this field matter" for the fields you already know are
+involved, at 3–5 calls.
 
 Two advantages over leave-one-out ablation:
 

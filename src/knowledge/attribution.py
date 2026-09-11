@@ -52,6 +52,7 @@ __all__ = [
     "sql_identifiers",
     "attribute_sql_structurally",
     "attribute_by_ablation",
+    "reconcile_claimed_fields",
     "sql_similarity",
 ]
 
@@ -213,6 +214,58 @@ def attribute_sql_structurally(sql: str, units: Sequence[ContextUnit]) -> Attrib
         ))
     report.attributions.sort(key=lambda a: -a.score)
     return report
+
+
+# ── claimed vs actual ─────────────────────────────────────────────────────
+
+def reconcile_claimed_fields(sql: str, claimed: Iterable[str],
+                             units: Sequence[ContextUnit] | None = None) -> dict:
+    """Compare the fields the model *says* it used against the ones the SQL
+    actually reads. Free — no model call, no ablation.
+
+    The generator already emits ``campos_entrada`` in every DQC, and nothing
+    has ever checked it. Reconciling it against the parsed query gives a
+    grounding signal at zero cost, and the disagreements are the interesting
+    part:
+
+    ``confirmed``
+        Declared and present. The model's account of itself holds up.
+    ``unsupported_claim``
+        Declared but absent from the query. The model asserted a dependency it
+        did not act on — the shape of a hallucinated justification, and the
+        reason a self-reported citation should never be trusted unverified.
+    ``undeclared_use``
+        Present but not declared. The query reads something the model did not
+        account for; harmless alone, but it means ``campos_entrada`` cannot be
+        used as a complete provenance record.
+
+    ``units``, when supplied, restricts "undeclared" to identifiers that are
+    real dictionary fields, so table aliases and computed column names are not
+    reported as undeclared reads.
+    """
+    actual = sql_identifiers(sql)
+    if units is not None:
+        known = {u.key.upper() for u in units if u.kind == "field"}
+        actual = {i for i in actual if i in known}
+    declared = {str(c).upper() for c in (claimed or []) if str(c).strip()}
+
+    confirmed = sorted(declared & actual)
+    unsupported = sorted(declared - actual)
+    undeclared = sorted(actual - declared)
+    # Two separate questions, deliberately not collapsed into one number:
+    # a model that claims three fields and uses one has a precision problem
+    # (it justified itself with fields it ignored), while one that uses three
+    # and claims one has a recall problem (its account is incomplete). Only
+    # the first looks like hallucination.
+    return {
+        "confirmed": confirmed,
+        "unsupported_claim": unsupported,
+        "undeclared_use": undeclared,
+        "claim_precision": (round(len(confirmed) / len(declared), 3)
+                            if declared else None),
+        "claim_recall": (round(len(confirmed) / len(actual), 3)
+                         if actual else None),
+    }
 
 
 # ── counterfactual attribution ────────────────────────────────────────────

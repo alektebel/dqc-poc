@@ -401,6 +401,36 @@ def _minmax(values: list[float]) -> list[float]:
     return [(v - lo) / (hi - lo) for v in values]
 
 
+def rank_fields(fields: list[FieldEntry], instructions: list[str],
+                embedder=None) -> list[float]:
+    """Relevance score per field for THIS instruction batch, in field order.
+
+    Split out of :func:`select_relevant_fields` so the scores can be reported
+    as provenance — "why was this field in the prompt at all" — instead of
+    being computed and thrown away. Scoring is unchanged.
+    """
+    text = " ".join(instructions)
+    words = {_norm(w) for w in _WORD_RE.findall(text)}
+    lex = [_lexical_score(e, words) for e in fields]
+
+    sem: list[float] | None = None
+    if embedder is not None:
+        try:
+            field_texts = [f"{e.name}. {e.description}".strip() for e in fields]
+            vecs = embedder.embed([text] + field_texts)
+            query_vec = vecs[0]
+            if any(query_vec):   # non-zero ⇒ embeddings really ran (not stub)
+                sem = [_cosine(query_vec, fv) for fv in vecs[1:]]
+        except Exception as exc:  # noqa: BLE001 — semantic channel is best-effort
+            logger.warning("semantic field filter failed: %s", exc)
+            sem = None
+
+    if sem is None:
+        return lex
+    lex_n, sem_n = _minmax(lex), _minmax(sem)
+    return [_LEX_WEIGHT * l + _SEM_WEIGHT * s for l, s in zip(lex_n, sem_n)]
+
+
 def select_relevant_fields(fields: list[FieldEntry], instructions: list[str],
                            cap: int = MAX_FIELDS_PER_CALL,
                            embedder=None,
@@ -421,33 +451,16 @@ def select_relevant_fields(fields: list[FieldEntry], instructions: list[str],
     below ``MIN_FIELDS_KEPT`` (or the dictionary size, whichever is smaller),
     so a small dictionary is left intact. Explicitly-named fields score
     highest and are always kept.
+
+    Note the recall cost of this filter is measured by
+    ``DQC/eval/schema_linking.py`` — a field dropped here cannot be recovered
+    downstream.
     """
     n = len(fields)
     keep = min(cap, max(n - drop_least, min(n, MIN_FIELDS_KEPT)))
     if keep >= n:
         return fields
-    text = " ".join(instructions)
-    words = {_norm(w) for w in _WORD_RE.findall(text)}
-    lex = [_lexical_score(e, words) for e in fields]
-
-    sem: list[float] | None = None
-    if embedder is not None:
-        try:
-            field_texts = [f"{e.name}. {e.description}".strip() for e in fields]
-            vecs = embedder.embed([text] + field_texts)
-            query_vec = vecs[0]
-            if any(query_vec):   # non-zero ⇒ embeddings really ran (not stub)
-                sem = [_cosine(query_vec, fv) for fv in vecs[1:]]
-        except Exception as exc:  # noqa: BLE001 — semantic channel is best-effort
-            logger.warning("semantic field filter failed: %s", exc)
-            sem = None
-
-    if sem is None:
-        combined = lex
-    else:
-        lex_n, sem_n = _minmax(lex), _minmax(sem)
-        combined = [_LEX_WEIGHT * l + _SEM_WEIGHT * s
-                    for l, s in zip(lex_n, sem_n)]
+    combined = rank_fields(fields, instructions, embedder)
 
     order = sorted(range(len(fields)), key=lambda i: (-combined[i], i))
     chosen = {id(fields[i]) for i in order[:keep]}

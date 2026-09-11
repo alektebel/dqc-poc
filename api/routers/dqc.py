@@ -929,18 +929,40 @@ async def generate_dqc_stream(
             # call and no guessing.
             atribucion = None
             try:
-                report = attrib.attribute_sql_structurally(
-                    items[0].regla_sql, attrib.units_from_fields(fields))
+                units = attrib.units_from_fields(fields)
+                report = attrib.attribute_sql_structurally(items[0].regla_sql, units)
                 usados = [a.unit.key for a in report.used()]
                 citas = report.citations()
                 if usados:
-                    atribucion = {"campos": usados, "citas": citas}
+                    # Free grounding check: the model already declares
+                    # campos_entrada, so compare what it says it used against
+                    # what the query reads. A claimed-but-unused field is the
+                    # shape of a hallucinated justification.
+                    recon = attrib.reconcile_claimed_fields(
+                        items[0].regla_sql, items[0].campos_entrada, units)
+                    # Why each field was in the prompt at all — the retriever
+                    # already computed this and used to throw it away.
+                    ranked = dict(zip(
+                        [f.name for f in fields],
+                        dict_ai.rank_fields(fields, [entry["regla"]])))
+                    atribucion = {
+                        "campos": usados,
+                        "citas": citas,
+                        "relevancia": {c: round(ranked.get(c, 0.0), 2)
+                                       for c in usados},
+                        **recon,
+                    }
+                    detalle = ", ".join(usados)
+                    if citas:
+                        detalle += f" — {', '.join(citas)}"
+                    if recon["unsupported_claim"]:
+                        detalle += ("; declarados pero no usados: "
+                                    + ", ".join(recon["unsupported_claim"]))
                     trace.append({
                         "paso": "atribucion",
                         "pregunta": "¿En qué se basa la consulta?",
-                        "resultado": "si",
-                        "detalle": ", ".join(usados)
-                                   + (f" — {', '.join(citas)}" if citas else ""),
+                        "resultado": "no" if recon["unsupported_claim"] else "si",
+                        "detalle": detalle,
                     })
                     if validacion is not None:
                         validacion["atribucion"] = atribucion

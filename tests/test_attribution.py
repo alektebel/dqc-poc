@@ -258,3 +258,70 @@ def test_openai_scorer_refuses_without_configuration():
     from src.knowledge.logprob_scoring import LogprobUnavailable, openai_logprob_scorer
     with pytest.raises(LogprobUnavailable):
         openai_logprob_scorer("SELECT 1", base_url="", model="")
+
+
+# ── claimed vs actual reconciliation (free grounding signal) ─────────────
+
+def test_reconcile_confirms_a_truthful_claim():
+    from src.knowledge.attribution import reconcile_claimed_fields
+    r = reconcile_claimed_fields("SELECT ID FROM t WHERE PD_ESTIMADA < 0",
+                                 ["PD_ESTIMADA"])
+    assert r["confirmed"] == ["PD_ESTIMADA"]
+    assert r["unsupported_claim"] == []
+    assert r["claim_precision"] == 1.0   # everything it claimed, it used
+
+
+def test_reconcile_catches_a_field_the_model_claimed_but_never_used():
+    """The shape of a hallucinated justification: campos_entrada asserts a
+    dependency the query does not act on."""
+    from src.knowledge.attribution import reconcile_claimed_fields
+    r = reconcile_claimed_fields("SELECT ID FROM t WHERE PD_ESTIMADA < 0",
+                                 ["PD_ESTIMADA", "LGD_FINAL"])
+    assert r["unsupported_claim"] == ["LGD_FINAL"]
+    assert r["claim_precision"] == 0.5   # half its account was unsupported
+
+
+def test_reconcile_reports_an_undeclared_read():
+    from src.knowledge.attribution import reconcile_claimed_fields
+    units = units_from_fields([_Field("PD_ESTIMADA"), _Field("SEGMENTO")])
+    r = reconcile_claimed_fields(
+        "SELECT ID FROM t WHERE PD_ESTIMADA < 0 AND SEGMENTO = 'X'",
+        ["PD_ESTIMADA"], units)
+    assert r["undeclared_use"] == ["SEGMENTO"]
+
+
+def test_reconcile_ignores_aliases_when_units_are_supplied():
+    """Table aliases and computed names are not undeclared field reads."""
+    from src.knowledge.attribution import reconcile_claimed_fields
+    units = units_from_fields([_Field("PD_ESTIMADA")])
+    sql = "SELECT cc.PD_ESTIMADA AS PD_CALC FROM tabla cc"
+    assert reconcile_claimed_fields(sql, ["PD_ESTIMADA"], units)["undeclared_use"] == []
+    # without units, the alias and the computed name look like reads
+    assert reconcile_claimed_fields(sql, ["PD_ESTIMADA"])["undeclared_use"]
+
+
+def test_reconcile_is_case_insensitive_and_free():
+    from src.knowledge.attribution import reconcile_claimed_fields
+    r = reconcile_claimed_fields("select pd_estimada from t", ["PD_Estimada"])
+    assert r["confirmed"] == ["PD_ESTIMADA"]
+
+
+def test_precision_and_recall_answer_different_questions():
+    """Claiming fields it never used is the hallucination signal; using fields
+    it never claimed only means the account is incomplete."""
+    from src.knowledge.attribution import reconcile_claimed_fields
+    units = units_from_fields([_Field("A"), _Field("B"), _Field("C")])
+
+    over = reconcile_claimed_fields("SELECT A FROM t", ["A", "B", "C"], units)
+    assert over["claim_precision"] < 1.0 and over["claim_recall"] == 1.0
+
+    under = reconcile_claimed_fields("SELECT A, B, C FROM t", ["A"], units)
+    assert under["claim_precision"] == 1.0 and under["claim_recall"] < 1.0
+
+
+def test_reconcile_with_nothing_claimed_reports_no_precision():
+    from src.knowledge.attribution import reconcile_claimed_fields
+    units = units_from_fields([_Field("A")])
+    r = reconcile_claimed_fields("SELECT A FROM t", [], units)
+    assert r["claim_precision"] is None     # no account to verify
+    assert r["undeclared_use"] == ["A"]

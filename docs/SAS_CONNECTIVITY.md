@@ -6,6 +6,37 @@ dynamic validation runs against a local SQLite fixture. Before designing
 anything that submits generated code to a real server, the failure surface has
 to be known.
 
+Two scripts, one that creates a connection and one that diagnoses it.
+
+## Setting one up — `scripts/sas_setup.py`
+
+```bash
+python scripts/sas_setup.py                 # interactive wizard
+python scripts/sas_setup.py --verify        # re-test the saved profile
+python scripts/sas_setup.py --show          # print the config it would use
+python scripts/sas_setup.py --non-interactive --host sas.corp --user me
+```
+
+It asks for what it needs, writes the config saspy expects, verifies it end to
+end by invoking the probe, and leaves a reusable profile behind.
+
+- Profiles in `~/.dqc/sas_profiles.json`, generated saspy config in
+  `~/.dqc/sascfg_personal.py`, both `0600`.
+- **Passwords are never written to either.** They come from `SAS_PASSWORD` or a
+  prompt, per run. The `Profile` dataclass has no field for one, so there is
+  nowhere for a secret to be persisted by accident.
+- saspy is configured by a *Python module*, not a dotfile, which is why the
+  config is generated rather than templated — and why the setup tells you to
+  put `~/.dqc` on `PYTHONPATH`.
+- It looks for `sas.core.jar` and `sas.security.sspi.jar` in the usual install
+  roots. These ship with a SAS client installation and are **not on PyPI**; if
+  they are absent the connection cannot be made from that machine regardless of
+  anything else, which is worth knowing before being prompted for a password.
+- Prerequisites are reported as install commands, and the profile is saved
+  anyway so it is ready once they are resolved.
+
+## Diagnosing one — `scripts/sas_probe.py`
+
 [`scripts/sas_probe.py`](../scripts/sas_probe.py) walks the connection path in
 stages and returns a machine-readable code for every outcome.
 
@@ -86,6 +117,13 @@ missing. Classification is stage-aware — this was found by pointing the probe
 at a non-Viya HTTPS host and getting `TABLE_NOT_FOUND`.
 
 ## Verified
+
+The setup script is tested for the things that would bite quietly: the profile
+has no password field, both files are written `0600`, the generated
+`sascfg_personal.py` executes to the module saspy expects, a corrupt profile
+file does not crash, and the wizard takes defaults instead of blocking when
+there is no terminal — `getpass` under a pipe turned `--verify` into a hang
+until that was fixed.
 
 Network and TLS classification is tested against real hosts: DNS failure,
 connection refused, and the three `badssl.com` certificate failures
