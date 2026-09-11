@@ -32,6 +32,33 @@ end by invoking the probe, and leaves a reusable profile behind.
 - Prerequisites are reported as install commands, and the profile is saved
   anyway so it is ready once they are resolved.
 
+### Installing a JRE
+
+saspy's IOM access runs over Java, so a runtime has to be present before
+anything else matters. **Version matters more than you would expect**: the SAS
+9.4 client jars are old (log4j 1.2.x, `sas.core` 9.4) and are not tested
+against current JDKs. Java **11** is the safe default, **8** the fallback if
+IOM refuses to start.
+
+| Platform | Command |
+|---|---|
+| Any, with `mise` | `mise use -g java@temurin-11` — no sudo |
+| Arch / Omarchy | `sudo pacman -S jre11-openjdk` |
+| Debian / Ubuntu | `sudo apt install openjdk-11-jre-headless` |
+| Fedora / RHEL | `sudo dnf install java-11-openjdk-headless` |
+| macOS | `brew install --cask temurin@11` |
+| Windows | `winget install EclipseAdoptium.Temurin.11.JRE` |
+
+**Do not install the unversioned distro package.** On Arch today
+`jre-openjdk` is Java **26**, far newer than the SAS jars expect. The setup
+script names the command for the package manager actually on the machine, and
+warns when the `java` already on `PATH` is newer than 17 rather than letting it
+fail later inside saspy.
+
+```bash
+java -version     # confirm afterwards
+```
+
 ### The Java classpath
 
 saspy's IOM access method runs over Java and needs **five** jars. This is the

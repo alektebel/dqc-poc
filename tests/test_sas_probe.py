@@ -247,3 +247,52 @@ def test_classpath_is_empty_when_nothing_is_found(tmp_path):
 def test_every_required_jar_has_a_recovery_hint():
     for line in ss.report_jars({}):
         assert ".jar —" in line
+
+
+# ── JRE guidance ─────────────────────────────────────────────────────────
+
+def test_jre_hint_matches_the_available_package_manager(monkeypatch):
+    """A generic 'apt install default-jre' is wrong on most machines; the hint
+    has to name the tool that is actually present."""
+    cases = [("mise", "mise use -g java@temurin-"),
+             ("pacman", "pacman -S jre"),
+             ("apt", "apt install openjdk-"),
+             ("dnf", "dnf install java-"),
+             ("brew", "brew install --cask temurin@")]
+    for tool, expected in cases:
+        monkeypatch.setattr(ss.shutil, "which",
+                            lambda name, _t=tool: "/usr/bin/x" if name == _t else None)
+        assert expected in ss.jre_install_hint(), tool
+
+
+def test_arch_hint_steers_away_from_the_unversioned_package(monkeypatch):
+    """`pacman -S jre-openjdk` installs the newest JDK (26 today), which is far
+    newer than SAS 9.4's IOM jars. The hint must pin a version and say why."""
+    monkeypatch.setattr(ss.shutil, "which",
+                        lambda name: "/usr/bin/pacman" if name == "pacman" else None)
+    hint = ss.jre_install_hint()
+    assert f"jre{ss.JRE_TARGET}-openjdk" in hint
+    assert "NOT 'jre-openjdk'" in hint
+
+
+def test_a_too_new_java_is_flagged_rather_than_accepted(monkeypatch):
+    monkeypatch.setattr(ss.shutil, "which", lambda name: "/usr/bin/java")
+    monkeypatch.setattr(ss, "java_version", lambda: 'openjdk version "26.0.2" 2026-01-20')
+    monkeypatch.setitem(sys.modules, "saspy", type(sys)("saspy"))
+    warnings = ss.check_dependencies("iom")
+    assert any("newer than SAS 9.4" in w for w in warnings)
+
+
+def test_java_11_is_accepted_without_complaint(monkeypatch):
+    monkeypatch.setattr(ss.shutil, "which", lambda name: "/usr/bin/java")
+    monkeypatch.setattr(ss, "java_version", lambda: 'openjdk version "11.0.32" 2025-10-21')
+    monkeypatch.setitem(sys.modules, "saspy", type(sys)("saspy"))
+    assert ss.check_dependencies("iom") == []
+
+
+def test_legacy_1_dot_8_version_string_is_parsed_as_8(monkeypatch):
+    """Java 8 reports itself as 1.8.0_xxx, not 8."""
+    monkeypatch.setattr(ss.shutil, "which", lambda name: "/usr/bin/java")
+    monkeypatch.setattr(ss, "java_version", lambda: 'java version "1.8.0_402"')
+    monkeypatch.setitem(sys.modules, "saspy", type(sys)("saspy"))
+    assert ss.check_dependencies("iom") == []

@@ -102,6 +102,47 @@ SAS_config_names = ["{profile.name}"]
 
 # ── checks ────────────────────────────────────────────────────────────────
 
+# saspy's IOM client talks to SAS 9.4-era jars (log4j 1.2.x, sas.core 9.4).
+# A current JDK is the wrong choice here: distro "jre-openjdk" is Java 26 on
+# Arch today, and the old jars are not tested against it. 11 is the safe
+# default, 8 the fallback when IOM complains.
+JRE_TARGET = "11"
+
+
+def jre_install_hint() -> str:
+    """The command that actually works on THIS machine."""
+    if shutil.which("mise"):
+        return (f"mise use -g java@temurin-{JRE_TARGET}"
+                f"   (no sudo; mise is already on this machine)")
+    if shutil.which("pacman"):
+        return (f"sudo pacman -S jre{JRE_TARGET}-openjdk"
+                f"   (NOT 'jre-openjdk' — that is Java 26, too new for SAS 9.4)")
+    if shutil.which("apt"):
+        return f"sudo apt install openjdk-{JRE_TARGET}-jre-headless"
+    if shutil.which("dnf"):
+        return f"sudo dnf install java-{JRE_TARGET}-openjdk-headless"
+    if shutil.which("brew"):
+        return f"brew install --cask temurin@{JRE_TARGET}"
+    if sys.platform == "win32":
+        return (f"winget install EclipseAdoptium.Temurin.{JRE_TARGET}.JRE"
+                f"   (or download from adoptium.net)")
+    return f"install a Java {JRE_TARGET} runtime (adoptium.net)"
+
+
+def java_version() -> str:
+    """Reported version of the java on PATH, or '' if none."""
+    exe = shutil.which("java")
+    if not exe:
+        return ""
+    try:
+        out = subprocess.run([exe, "-version"], capture_output=True, text=True,
+                             timeout=15)
+        line = (out.stderr or out.stdout or "").splitlines()
+        return line[0].strip() if line else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def check_dependencies(mode: str) -> list[str]:
     """Missing prerequisites, as actionable install lines."""
     missing: list[str] = []
@@ -116,8 +157,21 @@ def check_dependencies(mode: str) -> list[str]:
     except ImportError:
         missing.append("pip install saspy")
     if not shutil.which("java"):
-        missing.append("install a JRE (saspy's IOM access runs over Java) "
-                       "— e.g. apt install default-jre")
+        missing.append(f"install a JRE — saspy's IOM access runs over Java:\n"
+                       f"      {jre_install_hint()}")
+    else:
+        ver = java_version()
+        major = ""
+        import re as _re
+        m = _re.search(r'"(\d+)(?:\.(\d+))?', ver)
+        if m:
+            major = m.group(2) if m.group(1) == "1" else m.group(1)
+        if major.isdigit() and int(major) > 17:
+            missing.append(
+                f"Java {major} is newer than SAS 9.4's IOM jars are tested "
+                f"against ({ver}).\n"
+                f"      If the session fails to start, install Java "
+                f"{JRE_TARGET}:\n      {jre_install_hint()}")
     return missing
 
 
