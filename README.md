@@ -42,8 +42,22 @@ the seeded demo controls). For real generation, either:
 
 - add a local **Ollama** model: `docker compose --profile ollama up --build`
   (pulls `${OLLAMA_MODEL}`, default `qwen3:4b`), or
-- point `REGLLM_LLM=bedrock` at Amazon Bedrock (see
-  [`docs/AWS_POC_SETUP.md`](docs/AWS_POC_SETUP.md)).
+- point `REGLLM_LLM=bedrock` at Amazon Bedrock / Nova (see
+  [`docs/AWS_POC_SETUP.md`](docs/AWS_POC_SETUP.md)):
+
+  ```bash
+  REGLLM_LLM=bedrock docker compose up -d api      # Docker
+  REGLLM_LLM=bedrock uvicorn api.main:app --port 8000 --reload   # no Docker
+  ```
+
+  `curl localhost:8000/health` should then report `"llm_backend":"bedrock"`.
+  Note `REGLLM_LLM=auto` **never** selects Bedrock — it probes litert, ollama
+  and gguf, then falls back to `stub`, so it must be set explicitly. Defaults
+  are `eu.amazon.nova-micro-v1:0` in `eu-west-1`; that id is an *inference
+  profile*, and the bare `amazon.nova-micro-v1:0` is rejected for on-demand
+  throughput. Credentials come from the usual boto3 chain — compose mounts
+  `~/.aws` read-only and forwards `AWS_PROFILE` / `AWS_ACCESS_KEY_ID` /
+  `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` when set.
 
 To showcase the full workflow without any model, open the UI with
 `?demo=1` (client-side seed, no API needed).
