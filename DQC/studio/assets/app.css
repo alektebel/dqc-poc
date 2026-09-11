@@ -420,3 +420,21 @@ h2.studio-h2 { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.
   padding: 3px 9px; background: var(--color-accent-100); color: var(--color-accent-800);
   border: 2px solid var(--color-accent-600);
 }
+
+/* ── decision tree (Cómo se decidió) ──────────────────────────────────────
+   Retry attempts nest under a branch head, so a rule that took three tries
+   reads as three branches rather than one long flat list. */
+.studio-trace-branch { margin: 14px 0 0; padding-left: 14px; border-left: 2px solid var(--color-divider); }
+.studio-trace-branch-head {
+  display: block; font-size: 14px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--color-body); margin-bottom: 2px;
+}
+.studio-trace-nested { margin: 4px 0 0; }
+.studio-trace-nested .studio-trace-label { font-size: 16px; }
+.studio-trace-nested .studio-trace-detail { font-size: 14px; }
+.studio-trace-toggle {
+  float: right; font: inherit; font-size: 14px; font-weight: 600;
+  background: none; border: 0; padding: 2px 0; cursor: pointer;
+  color: var(--color-body); text-decoration: underline;
+}
+.studio-trace-toggle:hover { color: var(--color-ink); }

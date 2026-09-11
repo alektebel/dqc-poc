@@ -175,6 +175,93 @@ let currentProjectId = null;
 /* ── dom helpers ─────────────────────────────────────────────────────────── */
 const $ = (s, el = document) => el.querySelector(s);
 const el = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
+/* ── decision trace ───────────────────────────────────────────────────────
+   The backend streams steps shaped {paso, pregunta, resultado, detalle,
+   intento, accion, estado}; the demo seed uses {k, label, detail}. Normalise
+   both to {mark, rule, label, detail, intento} so "Cómo se decidió" renders
+   the real run and not a column of identical ticks. */
+const TRACE_MARKS = {
+  ok:   { mark: '✓', rule: '#201e1d' },
+  no:   { mark: '✗', rule: '#ec3013' },
+  warn: { mark: '!', rule: '#dd2b0f' },
+  step: { mark: '›', rule: '#6b6664' },
+};
+const TRACE_STEP_LABEL = {
+  suficiencia: '¿Información suficiente?',
+  generacion: 'Generar consulta SAS',
+  validacion: '¿Consulta válida?',
+  juicio: '¿El juez la aprueba?',
+  resultado: 'Resultado',
+};
+const TRACE_OUTCOME = {
+  completado: { kind: 'ok', label: 'Control generado' },
+  ambigua: { kind: 'warn', label: 'Regla ambigua — no se generó control' },
+  error: { kind: 'no', label: 'Sin resultado tras los reintentos' },
+};
+
+function normaliseTrace(raw) {
+  return (raw || []).map((t) => {
+    // demo shape
+    if (t.k || (t.label !== undefined && t.paso === undefined)) {
+      const m = TRACE_MARKS[t.k === 'bad' ? 'no' : t.k === 'warn' ? 'warn' : 'ok'] || TRACE_MARKS.ok;
+      return { mark: m.mark, rule: m.rule, label: t.label || '', detail: t.detail || '', intento: t.intento };
+    }
+    // backend shape
+    let kind = 'step';
+    if (t.resultado === 'si') kind = 'ok';
+    else if (t.resultado === 'no') kind = 'no';
+    let label = t.pregunta || t.accion || TRACE_STEP_LABEL[t.paso] || t.paso || '';
+    if (t.paso === 'resultado') {
+      const o = TRACE_OUTCOME[t.estado] || { kind: 'step', label: 'Resultado' };
+      kind = o.kind; label = o.label;
+    }
+    if (t.resultado === 'si') label += ' → sí';
+    else if (t.resultado === 'no') label += ' → no';
+    let detail = t.detalle || '';
+    if (t.paso === 'resultado' && t.estado === 'completado' && t.n_casos != null) {
+      detail = detail || `${t.n_casos} caso(s) detectado(s)`;
+    }
+    const m = TRACE_MARKS[kind];
+    return { mark: m.mark, rule: m.rule, label, detail, intento: t.intento };
+  });
+}
+
+/* Group the flat step list into the attempt branches it actually describes:
+   sufficiency, then one node per generate→validate→judge retry, then the
+   outcome. That is the decision tree, not a flat log. */
+function traceTree(steps) {
+  const branches = [];
+  let current = null;
+  for (const st of steps) {
+    if (st.intento != null) {
+      if (!current || current.intento !== st.intento) {
+        current = { intento: st.intento, steps: [] };
+        branches.push({ type: 'attempt', ...current });
+      }
+      current.steps.push(st);
+    } else {
+      current = null;
+      branches.push({ type: 'step', step: st });
+    }
+  }
+  return branches;
+}
+
+function renderTraceTree(raw) {
+  const branches = traceTree(normaliseTrace(raw));
+  if (!branches.length) return '';
+  const li = (st) => `<li class="studio-trace-item" style="--trace-rule:${st.rule};">`
+    + `<span class="studio-trace-mark" style="color:${st.rule};">${st.mark}</span>`
+    + `<span style="min-width:0;"><span class="studio-trace-label">${esc(st.label)}</span>`
+    + (st.detail ? `<span class="studio-trace-detail">${esc(st.detail)}</span>` : '')
+    + `</span></li>`;
+  return `<ol class="studio-trace">${branches.map((b) => b.type === 'step' ? li(b.step) : `
+      <li class="studio-trace-branch">
+        <span class="studio-trace-branch-head">Intento ${b.intento}</span>
+        <ol class="studio-trace studio-trace-nested">${b.steps.map(li).join('')}</ol>
+      </li>`).join('')}</ol>`;
+}
+
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtSize = (b) => { if (b == null) return ''; const n = Number(b); if (n < 1024) return n + ' B'; if (n < 1048576) return (n / 1024).toFixed(0) + ' KB'; return (n / 1048576).toFixed(1) + ' MB'; };
 const fileIcon = (t) => { const s = String(t || '').toLowerCase(); if (s.includes('spreadsheet') || s.includes('xls') || s.includes('sheet')) return 'XLSX'; if (s.includes('word') || s.includes('doc')) return 'DOC'; if (s.includes('text') || s.includes('csv') || s.includes('plain')) return 'TXT'; if (s.includes('sas')) return 'SAS'; return 'FILE'; };
@@ -604,7 +691,7 @@ function renderGenerar() {
             <div style="min-width:0;">
               <div class="studio-plan-regla">${esc(it.regla)}${it.bcbs239 ? ` <span class="studio-bcbs-inline">${esc(it.bcbs239)}</span>` : ''}</div>
               <div class="studio-plan-fase">${esc(it.fase)}</div>
-              ${it.trace && it.trace.length ? `<ol class="studio-trace-ol">${it.trace.map((t) => `<li style="--t-rule:${t.rule};"><span class="t-mark" style="color:${t.rule};">${t.mark}</span><span style="min-width:0;"><span class="t-label">${esc(t.label)}</span><span class="t-detail">${esc(t.detail)}</span></span></li>`).join('')}</ol>` : ''}
+              ${it.trace && it.trace.length ? `<ol class="studio-trace-ol">${normaliseTrace(it.trace).map((t) => `<li style="--t-rule:${t.rule};"><span class="t-mark" style="color:${t.rule};">${t.mark}</span><span style="min-width:0;"><span class="t-label">${esc(t.label)}</span>${t.detail ? `<span class="t-detail">${esc(t.detail)}</span>` : ''}</span></li>`).join('')}</ol>` : ''}
             </div>
             <div style="text-align:right;white-space:nowrap;">
               <div class="studio-plan-casos-label">Casos</div>
@@ -718,13 +805,13 @@ function renderRevisar() {
   const sev = cur.sev ? DEMO_SEV[cur.sev] : { bg: '#f8f4f4', fg: '#444141' };
   const bcbs = cur.bcbs239 || '';
   const trace = casesPayload.trace || cur.trace || [];
-  const traceMarkup = state.showTrace && trace.length ? `
+  const traceMarkup = trace.length ? `
     <section class="studio-review-section">
-      <h2 class="studio-section-head">Cómo se decidió</h2>
-      <ol class="studio-trace">${trace.map((t) => {
-        const m = DEMO_MARKS[t.k] || { mark: '✓', rule: '#201e1d' };
-        return `<li class="studio-trace-item" style="--trace-rule:${m.rule};"><span class="studio-trace-mark" style="color:${m.rule};">${m.mark}</span><span style="min-width:0;"><span class="studio-trace-label">${esc(t.label)}</span><span class="studio-trace-detail">${esc(t.detail)}</span></span></li>`;
-      }).join('')}</ol>
+      <h2 class="studio-section-head">Cómo se decidió
+        <button class="studio-trace-toggle" id="toggle-trace" type="button"
+                aria-expanded="${state.showTrace ? 'true' : 'false'}">${state.showTrace ? 'Ocultar' : 'Mostrar'}</button>
+      </h2>
+      ${state.showTrace ? renderTraceTree(trace) : ''}
     </section>` : '';
   const cols = casesPayload.columnas || cur.cols || cur.columnas || [];
   const rows = (casesPayload.ejemplos || cur.rows || cur.ejemplos || []).map((row) => {
@@ -782,6 +869,8 @@ function renderRevisar() {
       <button class="studio-btn-validate" id="validate">Validar este control</button>
       <button class="studio-btn-reject" id="reject">Rechazar</button>
     </div>`;
+  const traceBtn = $('#toggle-trace');
+  if (traceBtn) traceBtn.addEventListener('click', () => { state.showTrace = !state.showTrace; render(); });
   $('#validate').addEventListener('click', () => setStatus(cur.id, 'validated'));
   $('#reject').addEventListener('click', () => setStatus(cur.id, 'rejected'));
   const explBtn = $('#gen-expl');
@@ -870,12 +959,12 @@ function onStreamEvent(ev) {
     if (!it) return;
     if (d.estado === 'en_curso') {
       it.mark = '›'; it.markBg = '#dd2b0f'; it.markFg = '#ffffff'; it.fase = faseLabel(d.fase);
-      if (d.trace) it.trace = d.trace.map((t) => ({ mark: t.resultado === 'no' ? '!' : '✓', rule: t.resultado === 'no' ? '#dd2b0f' : '#201e1d', label: t.pregunta || t.accion || t.fase || 'Paso', detail: t.detalle || '' }));
+      if (d.trace) it.trace = d.trace;
     } else if (d.estado === 'completado') {
       it.mark = '✓'; it.markBg = '#201e1d'; it.markFg = '#ffffff'; it.fase = 'Control listo para revisar';
       it.casos = d.validacion?.n_casos != null ? String(d.validacion.n_casos) : String((d.dqcs || []).length);
       it.bcbs239 = d.dqcs && d.dqcs[0] ? (d.dqcs[0].bcbs239 || '') : '';
-      if (d.trace) it.trace = d.trace.map((t) => ({ mark: t.resultado === 'no' ? '!' : '✓', rule: t.resultado === 'no' ? '#dd2b0f' : '#201e1d', label: t.pregunta || t.accion || t.fase || 'Paso', detail: t.detalle || '' }));
+      if (d.trace) it.trace = d.trace;
     } else if (d.estado === 'ambigua') {
       it.mark = '!'; it.markBg = '#dd2b0f'; it.markFg = '#ffffff'; it.fase = 'Ambigua — ' + (d.falta || '');
     } else if (d.estado === 'error') {
