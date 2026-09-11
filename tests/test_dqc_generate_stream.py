@@ -421,7 +421,8 @@ def test_completed_item_carries_decision_trace(client, monkeypatch,
     completed = [d for e, d in events if e == "item"
                  and d["estado"] == "completado"][0]
     pasos = [t["paso"] for t in completed["trace"]]
-    assert pasos == ["suficiencia", "generacion", "validacion", "resultado"]
+    assert pasos == ["suficiencia", "generacion", "validacion",
+                     "atribucion", "resultado"]
     assert completed["trace"][0]["resultado"] == "si"
     assert completed["trace"][-1]["n_casos"] == 2
 
@@ -464,7 +465,7 @@ def test_correction_loop_trace_records_failed_validation(client, monkeypatch,
     assert pasos == [("suficiencia", "si"),
                      ("generacion", None), ("validacion", "no"),
                      ("generacion", None), ("validacion", "si"),
-                     ("resultado", None)]
+                     ("atribucion", "si"), ("resultado", None)]
 
 
 # ── unit: previous-id extraction ─────────────────────────────────────────────
@@ -486,3 +487,32 @@ def test_stream_validation_errors_stay_http(client, monkeypatch):
         files={"dictionary": ("d.xlsx", _make_dict_xlsx(),
                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
     assert resp.status_code == 400
+
+
+def test_completed_item_attributes_the_query_to_dictionary_fields(
+        client, monkeypatch, isolated_checks_db):
+    """Structural attribution names the fields the generated SQL reads, so a
+    reviewer can see what the query was based on without trusting the model."""
+    fake = _FakeClient([
+        {"plan": [{"id": 1, "regla": "PD <= 1", "accion": "?"}]},
+        _suf(),
+        _dqc(),
+    ])
+    _wire(monkeypatch, fake)
+    events = _parse_sse(_post(client, "DQC_PD_001: PD <= 1", with_data=True).text)
+    completed = [d for e, d in events if e == "item"
+                 and d["estado"] == "completado"][0]
+
+    atribucion = completed["atribucion"]
+    assert atribucion["campos"], "the query names at least one dictionary field"
+
+    paso = [t for t in completed["trace"] if t["paso"] == "atribucion"][0]
+    for campo in atribucion["campos"]:
+        assert campo in paso["detalle"]
+
+    # and it survives to the review panel
+    import sqlite3 as _sql
+    conn = _sql.connect(isolated_checks_db)
+    check_id = conn.execute("SELECT check_id FROM checks").fetchone()[0]
+    cases = client.get(f"/dqc/checks/{check_id}/cases").json()
+    assert cases["atribucion"]["campos"] == atribucion["campos"]

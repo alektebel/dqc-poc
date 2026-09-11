@@ -183,6 +183,119 @@ survive scrutiny.
 
 ---
 
+## Interpretability — what was this SQL based on?
+
+Two mechanisms, because they answer different questions at wildly different
+cost. Both live in [`src/knowledge/attribution.py`](../src/knowledge/attribution.py).
+
+### Structural attribution — free, exact, always on
+
+Generated DQCs are SQL, and SQL *names* what it reads. Parsing the identifiers
+out of the query and matching them against the dictionary fields that were in
+the prompt tells you with certainty which fields the query used — and, through
+each field's `reg_ref` in `data_dictionary.md`, which PD/LGD paragraph stands
+behind it.
+
+No model call, no surrogate, no guessing. It runs on every generated check and
+appears as an `atribucion` step in the decision trace and an **"En qué se
+basa"** panel in the review UI:
+
+```
+PD_FINAL   LGD_FINAL   EAD_TOTAL   ECL
+CRR Art. 158    BCBS 239 P3
+```
+
+Identifier extraction excludes SQL keywords, string literals and comments, so a
+column named only inside `-- a comment` is correctly *not* attributed.
+
+### Counterfactual attribution — expensive, on demand
+
+Structural attribution cannot explain context that shaped the query without
+being named in it: a description that fixed a threshold, a formula that
+determined a join, a guideline paragraph that motivated the rule at all. For
+those, remove one context unit, regenerate, and measure how far the SQL moved.
+
+```bash
+python scripts/attribute_dqc.py --rule "La PD estimada no puede ser negativa" \
+    --dictionary DQC/eval/data_dictionary.md --max-units 8 --regulation
+```
+
+**Why not ContextCite as published.** ContextCite (Cohen-Wang et al., 2024)
+fits a sparse linear surrogate on the *log-probability* of the response under
+randomly ablated context subsets. The Bedrock Runtime API exposes no
+logprobs — `ConverseResponse` carries only `output`, `stopReason`, `usage`,
+`metrics` and `trace`, and `InferenceConfiguration` only `maxTokens`,
+`temperature`, `topP` and `stopSequences` — so that signal does not exist
+against Nova. (The same check is why the determinism section above says a seed
+is unavailable.)
+
+The substitution: ablate one *meaningful* unit at a time rather than random
+subsets, and score by output distance instead of logprob shift. Leave-one-out
+over n units costs n calls instead of ContextCite's 32–64 samples, needs no
+surrogate, and yields a direct counterfactual — "the SQL changes when this
+field is removed" — rather than a regression coefficient.
+
+What it gives up is **interaction effects**: two units that each cover for the
+other both score 0 even though one is required. Rather than report a confident
+zero, `attribute_by_ablation` flags any unit the query *names* whose removal
+changed nothing as `suspected_redundancy`.
+
+Similarity is Jaccard over identifier sets, so reformatting, re-aliasing and
+comment churn do not register as semantic change.
+
+### Attributing the rule itself to the guidelines
+
+`units_from_reg_chunks` makes EBA GL/2017/16 paragraphs ablatable alongside
+dictionary fields. The same mechanism then answers a different question: not
+"which column did this query read" but **"which paragraph of the PD/LGD
+guidelines is this rule standing on"** — with `RegChunk.citation()` giving the
+reference to show a reviewer. That is the honest version of the proposal
+feature in §5.8: a proposed rule arrives with the paragraph whose removal
+would have changed it, not with a citation the model asserted.
+
+---
+
+## Gap 6 — schema-linking recall (measured: **0.938**, and it is a ceiling)
+
+`select_relevant_fields` is a tier-1 filter: it ranks the dictionary against
+the rule and sends only the top slice. Right design, but it creates a silent,
+unrecoverable failure — if a field the correct SQL must reference is cut before
+generation, no prompt change, retry or judge downstream can bring it back.
+
+[`DQC/eval/schema_linking.py`](../DQC/eval/schema_linking.py) measures it
+against the golden traces. On the current defaults it is **not 1.0**:
+
+| `cap` | `drop_least` | fields sent | micro recall | incomplete traces |
+|---|---|---|---|---|
+| **60 (current)** | **10 (current)** | **60 / 73** | **0.938** | **5 of 19** |
+| 73 | 10 | 63 / 73 | 0.958 | 3 |
+| 73 | 0 | 73 / 73 | **1.000** | 0 |
+
+G07 loses `ESTADO_CICLO`; G12 loses `COSTE_TOTAL_ACUMULADO` and
+`RECUPERACION_ACUMULADA`; G13 `CURE_FLAG`; G14 `RECUPERACION_ACUMULADA`;
+G20 `ADJUDICACION_FLAG`. Those five traces cannot score full marks on any
+downstream metric, and nothing in the harness was reporting why.
+
+The binding constraint is `MAX_FIELDS_PER_CALL = 60`, not `DROP_LEAST_FIELDS` —
+recall is flat across every `drop_least` from 10 down to 0, because the cap
+wins first. On a 73-field dictionary the filter is trimming 13 fields to save
+very little and costing 6% of required fields. It should engage only when the
+dictionary meaningfully exceeds the cap.
+
+```bash
+python DQC/eval/schema_linking.py                  # report
+python DQC/eval/schema_linking.py --fail-under 1.0 # CI gate
+python DQC/eval/schema_linking.py --no-embedder    # isolate the semantic channel
+```
+
+**Caveat on that number.** `dqc_react._field_embedder()` returns `None` in this
+environment — no embedding index is built — so both the measurement *and*
+generation are running the lexical channel alone. The semantic channel may
+recover some of these fields; that comparison needs an index and has not been
+run. Treat 0.938 as the lexical-only floor.
+
+---
+
 ## Gap 5 — other techniques worth adding
 
 Ordered by value per unit of effort.
@@ -236,6 +349,32 @@ Before trusting any headline number, confirm the model has not memorised the
 fixtures. Rename tables and columns to synthetic identifiers and re-run: a
 large drop means the score was partly recall, not reasoning.
 
+### 5.8 EBA guidelines as a rule-proposal surface
+
+`regulation_chunker.py`, `regulation_vector_store.py` and
+`build_regulation_embeddings.py` ingest 221 paragraphs of EBA GL/2017/16, and
+`DQC/coverage/applicability.yaml` maps sections to fields. **Nothing in the
+serving path imports the store** — only the builder script and a slim-imports
+test. It is the highest-value unconnected asset in the repo.
+
+Wiring it as a *proposal* surface:
+
+- **Drive it from the coverage matrix.** Propose only for UNCOVERED
+  field × article cells. That turns the matrix from a report into a work queue
+  with a natural stopping condition.
+- **Propose, never auto-apply.** `applicability.yaml`'s own header requires
+  every entry to be human-reviewed. A regulator-facing control that appeared
+  without approval is worse than a missing one.
+- **Attribute, do not assert.** Use `units_from_reg_chunks` + ablation so each
+  proposal carries the paragraph whose removal would have changed it.
+  `golden_eval.py` already detects invented references; this prevents them.
+
+Caution: the guidelines state obligations on the *institution*, not row-level
+predicates. Many paragraphs have no testable DQC. Make "not testable" a
+first-class outcome, or the model will invent checks to satisfy coverage —
+the reward-hacking the mixed-DB confusion matrix exists to catch, arriving
+through a new door.
+
 ### 5.7 Human spot-audit
 
 Sample ~20 generated checks per release for blind expert review, scored on the
@@ -252,7 +391,9 @@ auditor.
 2. Retry metrics (Gap 3) — pure instrumentation over traces you already emit.
 3. Temperature 0 and variance measurement (Gap 4) — small change, makes every
    other number trustworthy.
-4. Ambiguity/refusal set (5.1) — the largest untested behaviour.
+4. **Schema-linking recall (Gap 6) — measured at 0.938 and capping everything
+   downstream.** Fix the cap before tuning any prompt.
+5. Ambiguity/refusal set (5.1) — the largest untested behaviour.
 5. Cost/latency (5.2), then BCBS classification (5.3).
 6. Position/verbosity bias (Gap 2) — **before** building any pairwise
    comparison, not after.

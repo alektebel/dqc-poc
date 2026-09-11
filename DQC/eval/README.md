@@ -42,6 +42,7 @@ SAS pipeline (7 layers) ──► CICLOS_CALIBRADOS schema ──► data_dictio
 | `../coverage/applicability.yaml` | EBA GL/2017/16 section → field applicability map (human-reviewed). |
 | `golden_traces.json` | 16 hand-written golden traces: user request → expected defects caught, articles cited, quality constraints. Covers all 8 dimensions + 2 adversarial traces. |
 | `golden_eval.py` | Golden-trace harness: scores candidate DQC sets on c_valid / c_catches / c_grounding / c_coherence, aggregates into the 8-dimension rubric, detects hallucinated citations. `--selftest` proves the gold answers score 100%. |
+| `schema_linking.py` | Schema-linking recall: do the fields the gold SQL needs survive `select_relevant_fields`? A dropped field is unrecoverable downstream, so this caps every other metric. `--fail-under` for CI. |
 | `example_checks.sql` | A sample check file to exercise coverage mode. |
 | `data/` | Generated `clean.db`, `trap_<id>.db`, `mixed.db` (via `generate_db.py`). |
 

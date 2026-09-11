@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from src.knowledge import get_client, get_inspect_client
 from src.knowledge import bcbs239
+from src.knowledge import attribution as attrib
 from training.dq import checks_db
 
 from . import dqc_dictionary as dict_ai
@@ -312,7 +313,7 @@ CREATE TABLE IF NOT EXISTS check_eval_cases (
 )"""
 
 _CASE_KEYS = ("n_casos", "columnas", "ejemplos", "precision", "recall",
-              "esperados", "trace", "explicacion")
+              "esperados", "trace", "atribucion", "explicacion")
 
 
 def _save_check_cases(entries: list[tuple[str, dict]]) -> None:
@@ -782,6 +783,7 @@ async def generate_dqc_stream(
         comprobados = 0
         validaciones: dict[int, dict] = {}   # id(item) → executed validation
         traces: dict[int, list] = {}         # id(item) → decision trace
+        atribuciones: dict[int, dict] = {}   # id(item) → structural attribution
 
         for entry in plan:
             eid = entry["id"]
@@ -921,6 +923,30 @@ async def generate_dqc_stream(
                                     "trace": trace})
                 continue
 
+            # ── attribution: which dictionary fields the query demonstrably
+            # reads, and — through each field's reg_ref — which PD/LGD
+            # paragraphs stand behind it. Parsed from the SQL, so no model
+            # call and no guessing.
+            atribucion = None
+            try:
+                report = attrib.attribute_sql_structurally(
+                    items[0].regla_sql, attrib.units_from_fields(fields))
+                usados = [a.unit.key for a in report.used()]
+                citas = report.citations()
+                if usados:
+                    atribucion = {"campos": usados, "citas": citas}
+                    trace.append({
+                        "paso": "atribucion",
+                        "pregunta": "¿En qué se basa la consulta?",
+                        "resultado": "si",
+                        "detalle": ", ".join(usados)
+                                   + (f" — {', '.join(citas)}" if citas else ""),
+                    })
+                    if validacion is not None:
+                        validacion["atribucion"] = atribucion
+            except Exception:  # noqa: BLE001 - attribution must never break generation
+                logger.debug("structural attribution failed", exc_info=True)
+
             trace.append({"paso": "resultado", "estado": "completado",
                           "n_casos": (validacion or {}).get("n_casos")})
 
@@ -945,11 +971,14 @@ async def generate_dqc_stream(
                 if validacion and validacion.get("ejecutada"):
                     validaciones[id(it)] = validacion
                 traces[id(it)] = trace
+                if atribucion:
+                    atribuciones[id(it)] = atribucion
             dqcs.extend(items)
             yield _sse("item", {"id": eid, "estado": "completado",
                                 "dqcs": [i.model_dump() for i in items],
                                 "validacion": validacion,
                                 "explicacion": explicacion,
+                                "atribucion": atribucion,
                                 "trace": trace})
 
         _dedupe_ids(dqcs)
@@ -958,9 +987,12 @@ async def generate_dqc_stream(
             logger.info("persisted %d/%d DQCs", len(saved), len(dqcs))
             _save_check_cases([
                 (cid, {**validaciones.get(id(it), {}),
-                       "trace": traces.get(id(it), [])})
+                       "trace": traces.get(id(it), []),
+                       **({"atribucion": atribuciones[id(it)]}
+                          if id(it) in atribuciones else {})})
                 for it, cid in saved
-                if id(it) in validaciones or id(it) in traces])
+                if id(it) in validaciones or id(it) in traces
+                or id(it) in atribuciones])
         except Exception as exc:  # noqa: BLE001
             logger.warning("persist failed: %s", exc)
 

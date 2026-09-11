@@ -191,6 +191,7 @@ const TRACE_STEP_LABEL = {
   generacion: 'Generar consulta SAS',
   validacion: '¿Consulta válida?',
   juicio: '¿El juez la aprueba?',
+  atribucion: '¿En qué se basa la consulta?',
   resultado: 'Resultado',
 };
 const TRACE_OUTCOME = {
@@ -813,6 +814,14 @@ function renderRevisar() {
       </h2>
       ${state.showTrace ? renderTraceTree(trace) : ''}
     </section>` : '';
+  const atr = casesPayload.atribucion || cur.atribucion;
+  const atrMarkup = atr && atr.campos && atr.campos.length ? `
+    <section class="studio-review-section">
+      <h2 class="studio-section-head">En qué se basa</h2>
+      <p class="studio-muted" style="margin:6px 0 10px;">Campos del diccionario que la consulta lee, extraídos del SQL.</p>
+      <div class="studio-fields">${atr.campos.map((c) => `<span class="studio-field-chip">${esc(c)}</span>`).join('')}</div>
+      ${atr.citas && atr.citas.length ? `<div class="studio-citas">${atr.citas.map((c) => `<span class="studio-cita">${esc(c)}</span>`).join('')}</div>` : ''}
+    </section>` : '';
   const cols = casesPayload.columnas || cur.cols || cur.columnas || [];
   const rows = (casesPayload.ejemplos || cur.rows || cur.ejemplos || []).map((row) => {
     const cells = Array.isArray(row) ? row : cols.map((c) => row[c] ?? '');
@@ -846,6 +855,7 @@ function renderRevisar() {
     </div>
     <h1 class="studio-review-title">${esc(cur.name)}</h1>
     <p class="studio-review-desc">${esc(cur.desc || '')}</p>
+    ${atrMarkup}
     ${traceMarkup}
     <section class="studio-review-section">
       <h2 class="studio-section-head">Consulta SQL</h2>
