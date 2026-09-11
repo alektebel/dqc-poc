@@ -312,6 +312,26 @@ Enable Amazon Nova Micro/Pro in Bedrock → Model Access in the AWS console.
 ### Stack creation fails on IAM
 The stack requires `CAPABILITY_IAM` and `CAPABILITY_NAMED_IAM` — this is normal for CloudFormation that creates IAM roles.
 
+### "The security token included in the request is invalid" (InvalidClientTokenId)
+Usually not a credential problem. AWS reports a **disabled opt-in region** with
+this message, so valid long-lived keys fail in `eu-south-1`/`eu-south-2`,
+`me-*`, `af-*`, `ap-east-*` and `il-*` while working everywhere else. Check:
+
+```bash
+aws sts get-caller-identity --region us-east-1     # always-enabled control
+aws sts get-caller-identity --region <your region> # the one that fails
+aws account list-regions --region-opt-status-contains ENABLED ENABLED_BY_DEFAULT \
+  --query 'Regions[].RegionName' --output text
+```
+
+If `us-east-1` works and the other does not, the region is not enabled — pick
+an enabled one or turn it on under Console → Account → AWS Regions. If
+`us-east-1` fails too, the credentials really are bad or expired (`aws sso
+login`). `deploy.sh` now makes this check up front and prints the enabled list.
+
+Note the Nova defaults are EU inference profiles (`eu.amazon.nova-*`), which
+require an **enabled EU region** — `eu-west-1` is the tested one.
+
 ### VPC/subnet issues
 Only `--with-ecs` needs a VPC — the Lambda deployment does not. The deploy script
 never creates networking, so pass `--vpc-id` and `--subnet-ids` explicitly. The subnets must be in the given VPC and span at least two AZs, or

@@ -113,6 +113,33 @@ if ! aws sts get-caller-identity --query 'Arn' --output text > /dev/null 2>&1; t
   exit 1
 fi
 
+# Verify the credentials work *in the target region*. A disabled opt-in region
+# (eu-south-1/2, me-*, af-*, ap-east-*, il-*) fails with InvalidClientTokenId —
+# "The security token included in the request is invalid" — which reads like an
+# expired credential but means the region is not enabled for the account.
+if ! STS_ERR=$(aws sts get-caller-identity --region "${AWS_REGION}" \
+      --query 'Arn' --output text 2>&1 > /dev/null); then
+  echo ""
+  echo "ERROR: credentials are valid but rejected in ${AWS_REGION}:"
+  echo "    ${STS_ERR}"
+  echo ""
+  if [[ "${STS_ERR}" == *InvalidClientTokenId* ]]; then
+    echo "  'InvalidClientTokenId' here almost always means ${AWS_REGION} is an"
+    echo "  opt-in region that is NOT ENABLED for this account, not that the"
+    echo "  token is bad. Either pick an enabled region:"
+    echo ""
+    aws account list-regions --region-opt-status-contains ENABLED ENABLED_BY_DEFAULT \
+      --query 'Regions[].RegionName' --output text 2>/dev/null \
+      | tr '\t' '\n' | sed 's/^/      /' || echo "      (account:ListRegions denied)"
+    echo ""
+    echo "  ...or enable it: AWS Console > Account > AWS Regions > Enable."
+  else
+    echo "  If these are temporary credentials (SSO/STS), they have likely"
+    echo "  expired — re-run 'aws sso login' or refresh them."
+  fi
+  exit 1
+fi
+
 echo "    Account: ${ACCOUNT_ID}"
 echo "    Region:  ${AWS_REGION}"
 echo "    Stack:   ${STACK_NAME}"
