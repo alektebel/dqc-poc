@@ -51,6 +51,18 @@ the seeded demo controls). For real generation, either:
   ```
 
   `curl localhost:8000/health` should then report `"llm_backend":"bedrock"`.
+  If it does not, run the diagnostic **from the failing environment**, using the
+  same interpreter the app uses:
+
+  ```bash
+  .venv/bin/python scripts/check_aws.py        # or
+  docker exec dqc-poc-api python scripts/check_aws.py
+  ```
+
+  It names the credential source, separates a disabled region from a bad
+  credential, and ends with a real Nova call. A venv never changes which
+  credentials boto3 finds — it shares the CLI's chain (env vars → `~/.aws` →
+  SSO cache → IMDS), so CLI/app disagreements are always environmental.
   `REGLLM_LLM=auto` also reaches Nova now: it probes litert, ollama and gguf,
   then Bedrock when AWS credentials resolve, and only stubs if nothing answers.
   Setting it explicitly is still clearer, and is what the Docker default does
