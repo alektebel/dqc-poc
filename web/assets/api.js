@@ -51,35 +51,3 @@ function formatDate(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
          `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
-
-/** Consume a Server-Sent Events response opened with POST (fetch, not
-    EventSource, which is GET-only). Calls onEvent(name, data) per frame. */
-async function consumeStream(path, formData, onEvent) {
-  const res = await fetch(API + path, { method: 'POST', body: formData });
-  if (!res.ok) {
-    const text = await res.text();
-    let detail = text;
-    try { detail = JSON.parse(text).detail || text; } catch (_) { /* raw */ }
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let cut;
-    while ((cut = buffer.indexOf('\n\n')) !== -1) {
-      const frame = buffer.slice(0, cut);
-      buffer = buffer.slice(cut + 2);
-      let name = 'message';
-      const data = [];
-      for (const line of frame.split('\n')) {
-        if (line.startsWith('event:')) name = line.slice(6).trim();
-        else if (line.startsWith('data:')) data.push(line.slice(5).trim());
-      }
-      if (data.length) onEvent(name, JSON.parse(data.join('')));
-    }
-  }
-}

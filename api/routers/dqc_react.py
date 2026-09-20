@@ -26,7 +26,6 @@ historically flagged cases.
 from __future__ import annotations
 
 import logging
-import os
 import re
 import sqlite3
 from typing import Any
@@ -450,16 +449,31 @@ def load_cases(data: bytes, table_name: str,
     return CasesContext(headers, rows, label_idx, table_name)
 
 
+def normalise_table_reference(sql: str, table_name: str, target: str,
+                              bare: str | None = None) -> str:
+    """Point a generated query at the table as it is really named.
+
+    The model writes the table the way the prompt named it
+    (``mylib.contratos``); the executor knows what it is actually called
+    — a quoted in-memory table, or a schema-qualified name in the bank's
+    database. Also drops the PROC SQL wrapper the model sometimes adds
+    despite being told not to.
+    """
+    q = sql.strip().rstrip(";")
+    q = re.sub(r"(?im)^\s*(proc\s+sql\s*;|quit\s*;?)\s*$", "", q).strip()
+    bare = bare or table_name.split(".")[-1]
+    q = re.sub(re.escape(table_name), target, q, flags=re.I)
+    # a bare lib.table nobody declared → the target as well
+    q = re.sub(r"\b[A-Za-z_]\w*\." + re.escape(bare) + r"\b", target, q,
+               flags=re.I)
+    return q
+
+
 def run_query(ctx: CasesContext, sql: str, table_name: str) -> dict:
     """Execute a generated query against the cases; returns
     {ok, error?, columnas, ejemplos, n_casos, casos (set of _CASO_ ids)}."""
-    q = sql.strip().rstrip(";")
-    # tolerate PROC SQL wrappers the model might add despite instructions
-    q = re.sub(r"(?im)^\s*(proc\s+sql\s*;|quit\s*;?)\s*$", "", q).strip()
-    q = re.sub(re.escape(table_name), f'"{ctx.table}"', q, flags=re.I)
-    # a bare lib.table nobody declared → last part only
-    q = re.sub(r"\b[A-Za-z_]\w*\." + re.escape(ctx.table) + r"\b",
-               f'"{ctx.table}"', q, flags=re.I)
+    q = normalise_table_reference(sql, table_name, f'"{ctx.table}"',
+                                  bare=ctx.table)
     try:
         cur = ctx.conn.execute(q)
         rows = cur.fetchmany(MAX_FETCH_ROWS)

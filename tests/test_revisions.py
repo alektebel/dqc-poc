@@ -9,9 +9,8 @@ contract rather than generation quality.
 
 from __future__ import annotations
 
-import io
-import json
 import os
+import time
 
 import pytest
 
@@ -45,14 +44,29 @@ GOOD_SQL = "SELECT ID_CONTRATO FROM contratos WHERE EDAD_CLIENTE > 130"
 
 
 class _FakeClient:
-    """Answers sufficiency, then generation, then anything else."""
+    """Answers sufficiency, then generation, then anything else.
 
-    def __init__(self, sql: str = GOOD_SQL):
+    ``botch`` makes every rule whose text contains that word come back
+    with a query over a column the dictionary does not have, so static
+    validation rejects it — one failing rule among good ones.
+    """
+
+    def __init__(self, sql: str = GOOD_SQL, botch: str = ""):
         self.sql = sql
+        self.botch = botch
         self.calls: list[dict] = []
 
     def chat_json(self, system, user, **kwargs):
         self.calls.append({"system": system, "user": user})
+        if self.botch and self.botch in user and "suficiente" not in system:
+            return {"dqcs": [{
+                "dqc_id": "DQC_MALO", "variable": "NO_EXISTE",
+                "descripcion": "control sobre un campo inexistente",
+                "tipo": "rango", "severidad": "advertencia",
+                "regla_sql": "SELECT NO_EXISTE FROM contratos WHERE NO_EXISTE > 1",
+                "condicion_error": "NO_EXISTE > 1",
+                "campos_entrada": ["NO_EXISTE"],
+            }]}
         if "suficiente" in system:
             return {"suficiente": True, "campos": ["EDAD_CLIENTE", "ID_CONTRATO"],
                     "interpretacion": "rango máximo sobre la edad", "falta": ""}
@@ -225,21 +239,82 @@ def test_rules_are_scoped_to_their_revision(client, fake):
     assert client.get(f"/dqc/revisions/{second}/rules").json()["rules_total"] == 0
 
 
-def test_batch_upload_streams_and_stores_every_rule(client, fake):
+def _await_job(client, rid, job_id, timeout=30.0):
+    """Poll the job the way the screen does, until it settles."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        job = client.get(f"/dqc/revisions/{rid}/jobs/{job_id}").json()
+        if job["status"] in ("completado", "error"):
+            return job
+        time.sleep(0.05)
+    raise AssertionError(f"job {job_id} no terminó: {job}")
+
+
+def test_batch_queues_a_job_and_stores_every_rule(client, fake):
     rid = _with_dictionary(client)
     rules_txt = ("La edad del cliente no puede superar 130 años.\n"
                  "La fecha de concesión debe ser anterior a la de vencimiento.\n")
     resp = client.post(f"/dqc/revisions/{rid}/rules/batch",
                        files={"rules_file": ("reglas.txt", rules_txt.encode(),
                                              "text/plain")})
-    assert resp.status_code == 200, resp.text
-    events = [line[7:].strip() for line in resp.text.splitlines()
-              if line.startswith("event:")]
-    assert events[0] == "meta" and events[-1] == "done"
-    done = json.loads([line[5:] for line in resp.text.splitlines()
-                       if line.startswith("data:")][-1])
-    assert done["guardados"] == 2
+    # the request returns immediately: the work is not inside it
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["total"] == 2
+    job_id = resp.json()["job_id"]
+
+    job = _await_job(client, rid, job_id)
+    assert job["status"] == "completado"
+    assert job["saved"] == 2 and job["failed"] == 0
+    assert [i["status"] for i in job["items"]] == ["completado", "completado"]
+    assert all(i["check_id"] for i in job["items"])
     assert client.get(f"/dqc/revisions/{rid}/rules").json()["rules_total"] == 2
+
+
+def test_a_failing_rule_does_not_sink_the_batch(client, monkeypatch):
+    """The whole point of one worker per rule: a rule that cannot be
+    derived marks its own row and the others still land."""
+    botched = _FakeClient(botch="vencimiento")
+    monkeypatch.setattr(dqc_router, "get_client", lambda: botched)
+    monkeypatch.setattr(dqc_router, "get_inspect_client", lambda: botched)
+
+    rid = _with_dictionary(client)
+    rules_txt = ("La edad del cliente no puede superar 130 años.\n"
+                 "La fecha de concesión debe ser anterior a la de vencimiento.\n")
+    job_id = client.post(f"/dqc/revisions/{rid}/rules/batch",
+                         files={"rules_file": ("reglas.txt", rules_txt.encode(),
+                                               "text/plain")}).json()["job_id"]
+
+    job = _await_job(client, rid, job_id)
+    assert job["status"] == "completado"       # the job itself did not crash
+    assert job["saved"] == 1 and job["failed"] == 1
+    estados = {i["regla"]: i["status"] for i in job["items"]}
+    assert estados["La edad del cliente no puede superar 130 años."] == "completado"
+    assert estados["La fecha de concesión debe ser anterior a la de vencimiento."] == "error"
+    bad = [i for i in job["items"] if i["status"] == "error"][0]
+    assert "NO_EXISTE" in bad["error"]
+    assert client.get(f"/dqc/revisions/{rid}/rules").json()["rules_total"] == 1
+
+
+def test_job_progress_is_visible_while_it_runs(client, fake):
+    rid = _with_dictionary(client)
+    resp = client.post(f"/dqc/revisions/{rid}/rules/batch",
+                       data={"rules": "La edad del cliente no puede superar 130 años."})
+    job_id = resp.json()["job_id"]
+    # every rule has a row from the moment the job is created
+    job = client.get(f"/dqc/revisions/{rid}/jobs/{job_id}").json()
+    assert len(job["items"]) == 1
+    assert job["items"][0]["regla"].startswith("La edad")
+    _await_job(client, rid, job_id)
+    assert client.get(f"/dqc/revisions/{rid}/jobs").json()["job_id"] == job_id
+
+
+def test_job_of_another_revision_is_not_readable(client, fake):
+    first = _with_dictionary(client)
+    second = _with_dictionary(client)
+    job_id = client.post(f"/dqc/revisions/{first}/rules/batch",
+                         data={"rules": "La edad no puede superar 130."}).json()["job_id"]
+    _await_job(client, first, job_id)
+    assert client.get(f"/dqc/revisions/{second}/jobs/{job_id}").status_code == 404
 
 
 def test_rerun_rederives_the_same_control(client, fake):

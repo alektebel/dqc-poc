@@ -20,14 +20,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from training.dq import checks_db, revisions_db
+from api.dq.executor import UploadedTableExecutor
+from api.dq.pipeline import RuleOutcome, run_rule_pipeline
+from api.dq.worker import run_rule
+from training.dq import checks_db, jobs_db, revisions_db
 
 from . import dqc as dqc_router
 from . import dqc_dictionary as dict_ai
@@ -38,6 +44,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/dqc/revisions", tags=["revisions"])
 
 MIN_DESCRIPTION = 100          # the form's own floor, enforced server-side too
+# Rules of a batch run side by side. This is the local stand-in for the
+# fan-out: one worker per rule, each with its own handle on the data —
+# the same shape as one Lambda invocation per rule, so the parallelism
+# assumptions are exercised here rather than discovered in AWS.
+JOB_WORKERS = max(1, int(os.getenv("REGLLM_JOB_WORKERS", "4")))
 PREVIEW_TTL_S = 30 * 60        # an unconfirmed interpretation is short-lived
 MAX_PREVIEWS = 64
 
@@ -129,12 +140,15 @@ def _stored(revision_id: str, stem: str) -> Path | None:
     return None
 
 
-def _load_context(revision: dict):
-    """(fields, cases) from the revision's stored dictionary and data file.
+def _context_factory(revision: dict):
+    """``(fields, make_executor)`` for this revision.
 
-    Both are required to add a rule: without a dictionary the generator
-    has no field names to ground on, and without data the control could
-    not be executed — which is what the rules screen shows.
+    The dictionary is parsed once — it is read-only and shared freely.
+    The executor is NOT: it holds a SQLite connection over the uploaded
+    table, and the batch runs rules in parallel, so every worker builds
+    its own by re-reading the stored file. That re-read is the cost the
+    fan-out pays, here and in AWS alike; making it visible locally is the
+    point.
     """
     revision_id = revision["revision_id"]
     dict_path = _stored(revision_id, "dictionary")
@@ -154,9 +168,11 @@ def _load_context(revision: dict):
             status_code=400,
             detail="No se pudo leer ningún campo del diccionario guardado.")
 
-    cases = None
     data_path = _stored(revision_id, "data")
-    if data_path is not None:
+
+    def make_executor():
+        if data_path is None:
+            return None
         try:
             cases = react.load_cases(data_path.read_bytes(),
                                      revision["table_name"], data_path.name)
@@ -164,7 +180,123 @@ def _load_context(revision: dict):
             raise HTTPException(status_code=400,
                                 detail=dqc_router._workbook_read_error(
                                     data_path.name, exc))
-    return fields, cases
+        return UploadedTableExecutor(cases, revision["table_name"])
+
+    return fields, make_executor
+
+
+def _store_outcome(outcome, revision_id: str) -> list[str]:
+    """Persist a completed rule: the control plus its detected cases."""
+    saved = dqc_router._persist_dqc_items(outcome.items, revision_id)
+    dqc_router._save_check_cases([
+        (cid, {**(outcome.validacion or {}),
+               "trace": outcome.trace,
+               **({"atribucion": outcome.atribucion}
+                  if outcome.atribucion else {})})
+        for _, cid in saved])
+    return [cid for _, cid in saved]
+
+
+def _run_job_item(job_id: str, idx: int, regla: str, revision: dict,
+                  fields, make_executor, client) -> bool:
+    """One rule of a batch, start to finish. Returns whether it was kept.
+
+    Every failure is contained: a rule that raises marks its own row and
+    leaves the rest of the batch alone. That isolation is most of why the
+    work is split per rule in the first place.
+    """
+    revision_id = revision["revision_id"]
+    conn = jobs_db.connect()
+    try:
+        jobs_db.set_item(conn, job_id, idx, status="en_curso")
+        try:
+            executor = make_executor()
+            outcome, _ = run_rule(
+                regla, fields=fields, table_name=revision["table_name"],
+                executor=executor, client=client,
+                on_progress=lambda ev: jobs_db.set_item(
+                    conn, job_id, idx, fase=ev.get("fase"),
+                    intento=ev.get("intento")))
+        except Exception as exc:  # noqa: BLE001 — one rule, one failure
+            logger.warning("job %s item %s failed: %s", job_id, idx, exc)
+            jobs_db.set_item(conn, job_id, idx, status="error", error=str(exc))
+            return False
+
+        if outcome.estado == "ambigua":
+            jobs_db.set_item(conn, job_id, idx, status="ambigua",
+                             error=outcome.falta or "regla ambigua")
+            return False
+        if outcome.estado != "completado" or not outcome.items:
+            jobs_db.set_item(conn, job_id, idx, status="error",
+                             error=outcome.error or "sin resultado")
+            return False
+
+        check_ids = _store_outcome(outcome, revision_id)
+        jobs_db.set_item(
+            conn, job_id, idx, status="completado",
+            check_id=check_ids[0] if check_ids else None,
+            n_casos=(outcome.validacion or {}).get("n_casos"))
+        return bool(check_ids)
+    finally:
+        conn.close()
+
+
+def _run_job(job_id: str, revision: dict, fields, make_executor,
+             rules: list[str], client) -> None:
+    conn = jobs_db.connect()
+    try:
+        jobs_db.set_job_status(conn, job_id, "en_curso")
+    finally:
+        conn.close()
+
+    saved = failed = 0
+    try:
+        with ThreadPoolExecutor(max_workers=JOB_WORKERS) as pool:
+            results = pool.map(
+                lambda pair: _run_job_item(job_id, pair[0], pair[1], revision,
+                                           fields, make_executor, client),
+                list(enumerate(rules, start=1)))
+            for kept in results:
+                saved += 1 if kept else 0
+                failed += 0 if kept else 1
+    except Exception as exc:  # noqa: BLE001 — the job must always settle
+        logger.exception("job %s crashed", job_id)
+        conn = jobs_db.connect()
+        try:
+            jobs_db.set_job_status(conn, job_id, "error", saved=saved,
+                                   failed=failed, error=str(exc))
+        finally:
+            conn.close()
+        return
+
+    conn = jobs_db.connect()
+    try:
+        jobs_db.set_job_status(conn, job_id, "completado", saved=saved,
+                               failed=failed)
+        revisions_db.update(conn, revision["revision_id"],
+                            status="completada" if saved else "error")
+    finally:
+        conn.close()
+
+
+def start_job(job_id: str, revision: dict, fields, make_executor,
+              rules: list[str], client) -> None:
+    """Run the job off the request thread.
+
+    A thread is the local stand-in for the queue: the request returns the
+    job id straight away and the rows carry the progress. In AWS this
+    call is what a Step Functions execution replaces.
+    """
+    threading.Thread(
+        target=_run_job,
+        args=(job_id, revision, fields, make_executor, rules, client),
+        name=f"dqc-job-{job_id}", daemon=True).start()
+
+
+def _load_context(revision: dict):
+    """``(fields, executor)`` for a single rule — one worker, built now."""
+    fields, make_executor = _context_factory(revision)
+    return fields, make_executor()
 
 
 def _prune_previews() -> None:
@@ -175,12 +307,13 @@ def _prune_previews() -> None:
         _PREVIEWS.pop(next(iter(_PREVIEWS)), None)
 
 
-def _run_one(regla: str, revision: dict, fields, cases,
-             comentario: str = "") -> tuple[dqc_router.RuleOutcome, list[dict]]:
+def _run_one(regla: str, revision: dict, fields, executor,
+             comentario: str = "") -> tuple[RuleOutcome, list[dict]]:
     """Drive the shared agent loop to completion, keeping its events."""
     entry = {"id": 1, "regla": regla, "accion": regla, "prev_id": ""}
-    gen = dqc_router._run_rule_pipeline(
-        entry, fields, revision["table_name"], cases,
+    gen = run_rule_pipeline(
+        entry, fields, revision["table_name"], executor,
+        client=dqc_router.get_client(),
         seed_feedback=[comentario] if comentario.strip() else None)
     events: list[dict] = []
     while True:
@@ -367,8 +500,8 @@ def preview_rule(revision_id: str, body: RuleRequest) -> dict:
     finally:
         conn.close()
 
-    fields, cases = _load_context(revision)
-    outcome, _ = _run_one(body.regla.strip(), revision, fields, cases,
+    fields, executor = _load_context(revision)
+    outcome, _ = _run_one(body.regla.strip(), revision, fields, executor,
                           body.comentario)
 
     preview_id = f"prev_{uuid.uuid4().hex[:12]}"
@@ -414,16 +547,19 @@ def confirm_rule(revision_id: str, body: ConfirmRequest) -> dict:
         conn.close()
 
 
-@router.post("/{revision_id}/rules/batch")
+@router.post("/{revision_id}/rules/batch", status_code=202)
 async def batch_rules(
     revision_id: str,
     rules_file: UploadFile | None = File(None, description=".txt, one rule per line"),
     rules: str = Form(""),
-):
-    """A rules file (or a block of lines): every rule through the same loop,
-    streamed as SSE so the screen ticks them off, and stored as it goes."""
-    from fastapi.responses import StreamingResponse
+) -> dict:
+    """Queue a rules file as a job: one row per rule, run in parallel.
 
+    Returns immediately with the job id; the screen polls
+    ``GET /dqc/revisions/{id}/jobs/{job_id}``. The work no longer lives
+    inside the request, so closing the browser does not cancel it and a
+    long catalogue is not one connection held open for minutes.
+    """
     conn = _conn()
     try:
         revision = _revision_or_404(conn, revision_id)
@@ -433,62 +569,46 @@ async def batch_rules(
     raw = await rules_file.read() if rules_file and rules_file.filename else None
     lines = dqc_router._collect_rules(
         rules, rules_file.filename if rules_file else None, raw)
-    fields, cases = _load_context(revision)
+    fields, make_executor = _context_factory(revision)
 
-    def event_stream():
-        conn = _conn()
-        try:
-            revisions_db.update(conn, revision_id, status="en_ejecucion")
-        finally:
-            conn.close()
-        yield dqc_router._sse("meta", {"reglas": len(lines),
-                                       "dictionary_fields": len(fields),
-                                       "casos": cases.n_rows if cases else 0})
-        yield dqc_router._sse("plan", {"items": [
-            {"id": i, "regla": line, "estado": "pendiente"}
-            for i, line in enumerate(lines, start=1)]})
+    conn = jobs_db.connect()
+    try:
+        job_id = jobs_db.create(conn, revision_id, lines)
+        revisions_db.update(conn, revision_id, status="en_ejecucion")
+    finally:
+        conn.close()
 
-        guardados = 0
-        fallidas = 0
-        for i, line in enumerate(lines, start=1):
-            entry = {"id": i, "regla": line, "accion": line, "prev_id": ""}
-            gen = dqc_router._run_rule_pipeline(
-                entry, fields, revision["table_name"], cases)
-            outcome = None
-            while True:
-                try:
-                    yield dqc_router._sse("item", next(gen))
-                except StopIteration as stop:
-                    outcome = stop.value
-                    break
-            if outcome.estado != "completado" or not outcome.items:
-                fallidas += 1
-                continue
-            saved = dqc_router._persist_dqc_items(outcome.items, revision_id)
-            dqc_router._save_check_cases([
-                (cid, {**(outcome.validacion or {}),
-                       "trace": outcome.trace,
-                       **({"atribucion": outcome.atribucion}
-                          if outcome.atribucion else {})})
-                for _, cid in saved])
-            guardados += len(saved)
-            yield dqc_router._sse("guardado", {
-                "id": i, "check_ids": [cid for _, cid in saved]})
+    start_job(job_id, revision, fields, make_executor, lines,
+              dqc_router.get_client())
+    return {"job_id": job_id, "total": len(lines), "status": "pendiente"}
 
-        conn = _conn()
-        try:
-            revisions_db.update(
-                conn, revision_id,
-                status="completada" if guardados else "error")
-        finally:
-            conn.close()
-        yield dqc_router._sse("done", {"guardados": guardados,
-                                       "fallidas": fallidas,
-                                       "reglas": len(lines)})
 
-    return StreamingResponse(
-        event_stream(), media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+@router.get("/{revision_id}/jobs/{job_id}")
+def get_job(revision_id: str, job_id: str) -> dict:
+    """Where the batch got to — the polling endpoint that replaced the
+    event stream."""
+    conn = jobs_db.connect()
+    try:
+        _revision_or_404(conn, revision_id)
+        job = jobs_db.get(conn, job_id)
+        if not job or job["revision_id"] != revision_id:
+            raise HTTPException(status_code=404,
+                                detail=f"job {job_id} no encontrado")
+        return job
+    finally:
+        conn.close()
+
+
+@router.get("/{revision_id}/jobs")
+def latest_job(revision_id: str) -> dict:
+    """The most recent batch of this revision, so a reloaded screen can
+    pick a run back up instead of losing it."""
+    conn = jobs_db.connect()
+    try:
+        _revision_or_404(conn, revision_id)
+        return jobs_db.latest_for_revision(conn, revision_id) or {}
+    finally:
+        conn.close()
 
 
 @router.post("/{revision_id}/rules/{check_id}/rerun")
@@ -514,8 +634,8 @@ def rerun_rule(revision_id: str, check_id: str, body: RerunRequest) -> dict:
         conn.close()
 
     regla = check["description"] or check["name"]
-    fields, cases = _load_context(revision)
-    outcome, _ = _run_one(regla, revision, fields, cases, body.motivo.strip())
+    fields, executor = _load_context(revision)
+    outcome, _ = _run_one(regla, revision, fields, executor, body.motivo.strip())
     if outcome.estado != "completado" or not outcome.items:
         raise HTTPException(
             status_code=409,

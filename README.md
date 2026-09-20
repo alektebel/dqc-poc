@@ -72,6 +72,33 @@ lotes, con contexto fresco en cada paso:
 Esa traza es lo que muestra la pestaña **Flujo de validación**: es el
 registro real de la ejecución, no una ilustración.
 
+### Dónde se ejecuta el control
+
+El agente deriva la consulta; ejecutarla es de `api/dq/executor.py`, y
+quién lo hace se elige por inyección:
+
+| Ejecutor | Dónde corre la consulta |
+|---|---|
+| `UploadedTableExecutor` | el fichero subido, en SQLite en memoria |
+| `DatabaseExecutor` | cualquier conexión DB-API 2.0 (cx_Oracle, pyodbc, psycopg2, snowflake): la consulta va a donde ya están los datos y solo vuelven los recuentos y una muestra |
+
+La consulta la escribe un modelo, así que **el modo solo-lectura se
+comprueba, no se supone**: `assert_read_only` rechaza cualquier cosa que
+no sea un único SELECT antes de que la conexión la vea. Es la segunda
+línea de defensa; la primera son credenciales de solo lectura.
+
+### Lotes
+
+Un fichero de reglas es un **job**: `POST .../rules/batch` responde al
+instante con un `job_id` y el trabajo ocurre fuera de la petición, un
+worker por regla (`REGLLM_JOB_WORKERS`, por defecto 4), cada uno con su
+propio acceso a los datos. La pantalla hace *polling* de
+`GET .../jobs/{job_id}`, que devuelve una fila por regla.
+
+Que cada regla sea una unidad aislada es lo que permite trocearla: en
+local es un hilo; en AWS sería una invocación de Lambda. Ver
+[`docs/AWS_ARCHITECTURE.md`](docs/AWS_ARCHITECTURE.md).
+
 El botón **Reejecutar** de un control vuelve a derivar la consulta pasando
 al generador el motivo que escribe el revisor, y la reejecuta. El control
 conserva su id y su historial: es la misma regla, reinterpretada.
@@ -89,7 +116,9 @@ Todo bajo `/dqc`. Las pantallas no usan ningún otro origen.
 | `GET /dqc/revisions/{id}/rules` | reglas de la revisión con sus últimos casos |
 | `POST /dqc/revisions/{id}/rules/preview` | interpretar una regla sin guardarla |
 | `POST /dqc/revisions/{id}/rules` | guardar la interpretación revisada |
-| `POST /dqc/revisions/{id}/rules/batch` | fichero de reglas, en streaming (SSE) |
+| `POST /dqc/revisions/{id}/rules/batch` | encola un fichero de reglas como job (202) |
+| `GET /dqc/revisions/{id}/jobs/{job_id}` | estado del job, una fila por regla |
+| `GET /dqc/revisions/{id}/jobs` | último job de la revisión |
 | `POST /dqc/revisions/{id}/rules/{cid}/rerun` | reejecutar con un motivo |
 | `GET /dqc/revisions/{id}/report` | informe: validadas + consulta centralizada |
 | `POST /dqc/checks/{id}/status` | validar / rechazar |
@@ -113,13 +142,16 @@ todas las filas.
 ## Estructura
 
 ```
-api/            FastAPI: /dqc/* + servicio estático de web/
-  routers/dqc.py         generador, bucle de agente, checks CRUD
-  routers/revisions.py   las revisiones y el flujo de las pantallas
+api/
+  dq/pipeline.py         el bucle de agente, sin FastAPI ni persistencia
+  dq/worker.py           una regla → un resultado JSON (la unidad de trabajo)
+  dq/executor.py         dónde se ejecuta el control (fichero | BBDD)
+  routers/dqc.py         generador por lotes, checks CRUD
+  routers/revisions.py   revisiones, jobs y el flujo de las pantallas
   routers/tabular.py     lector único .csv/.xlsx
 web/            las cuatro pantallas + assets/api.js, assets/rules.js
 src/knowledge/  cliente LLM multi-backend, BCBS 239, atribución
-training/dq/    persistencia SQLite (controles y revisiones)
+training/dq/    persistencia SQLite (controles, revisiones y jobs)
 DQC/eval/       harness de evaluación del agente (mutation testing)
 data/samples/   diccionario y casos de ejemplo
 tests/          suite completa (pytest)
@@ -132,7 +164,7 @@ Todo vive bajo `data/` y se monta como volumen en Docker:
 - `data/dq/checks.db` — revisiones y controles (SQLite).
 - `data/revisions/<id>/` — la tabla y el diccionario subidos en esa revisión.
 
-Variables: `REGLLM_CHECKS_DB`, `REGLLM_REVISIONS_DIR`.
+Variables: `REGLLM_CHECKS_DB`, `REGLLM_REVISIONS_DIR`, `REGLLM_JOB_WORKERS`.
 
 ## Tests
 
@@ -156,3 +188,4 @@ Ver [`DQC/eval/README.md`](DQC/eval/README.md) y
 - [`docs/REACT_PIPELINE.md`](docs/REACT_PIPELINE.md) — diseño del bucle de agente
 - [`docs/EVALUATION.md`](docs/EVALUATION.md) — cómo se mide el agente
 - [`docs/EVAL_ROADMAP.md`](docs/EVAL_ROADMAP.md) — qué no mide todavía
+- [`docs/AWS_ARCHITECTURE.md`](docs/AWS_ARCHITECTURE.md) — qué construiríamos en AWS, con costes y límites

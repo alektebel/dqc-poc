@@ -324,6 +324,36 @@ $('confirmReviewButton').addEventListener('click', async () => {
   }
 });
 
+const JOB_POLL_MS = 1500;
+
+/** Follow a batch to the end by polling its rows.
+
+    The batch used to arrive as a live event stream from inside the
+    request. It is a job now: the server answers immediately with an id
+    and the work happens elsewhere, one worker per rule. Polling is what
+    survives that move — and what survives a reload. */
+function jobSummary(job) {
+  const partes = [`${job.saved} regla(s) añadidas`];
+  if (job.failed) partes.push(`${job.failed} sin resultado`);
+  return partes.join(', ') + '.';
+}
+
+async function followJob(jobId) {
+  for (;;) {
+    const job = await api('/dqc/revisions/' + encodeURIComponent(revisionId) +
+                          '/jobs/' + encodeURIComponent(jobId));
+    const running = job.items.filter((i) => i.status === 'en_curso');
+    const fase = running.length && running[0].fase ? ` (${running[0].fase})` : '';
+    if (job.status === 'completado' || job.status === 'error') {
+      // the caller reloads the list before announcing the result, so the
+      // message never arrives before the rules it is talking about
+      return job;
+    }
+    leftMessage(`${job.done} de ${job.total} regla(s) procesadas${fase}…`, false);
+    await new Promise((done) => setTimeout(done, JOB_POLL_MS));
+  }
+}
+
 $('uploadRulesFileButton').addEventListener('click', async () => {
   const file = $('rulesFile').files[0];
   if (!file) return leftMessage('Selecciona un fichero de reglas.', true);
@@ -332,23 +362,13 @@ $('uploadRulesFileButton').addEventListener('click', async () => {
   payload.append('rules_file', file);
   $('uploadRulesFileButton').disabled = true;
   leftMessage('Enviando reglas…', false);
-  let total = 0;
   try {
-    await consumeStream(
-      '/dqc/revisions/' + encodeURIComponent(revisionId) + '/rules/batch', payload,
-      (name, data) => {
-        if (name === 'plan') {
-          total = data.items.length;
-          leftMessage(`${total} regla(s) en cola…`, false);
-        } else if (name === 'item') {
-          leftMessage(`Regla ${data.id} de ${total}: ${data.fase || data.estado}…`, false);
-        } else if (name === 'done') {
-          leftMessage(`${data.guardados} regla(s) añadidas` +
-                      (data.fallidas ? `, ${data.fallidas} sin resultado.` : '.'), false);
-        }
-      });
+    const queued = await api('/dqc/revisions/' + encodeURIComponent(revisionId) +
+                             '/rules/batch', { method: 'POST', body: payload });
+    const job = await followJob(queued.job_id);
     await loadRevision();
     await loadRules();
+    leftMessage(jobSummary(job), job.status === 'error');
   } catch (err) {
     leftMessage(err.message, true);
   } finally {
@@ -519,6 +539,14 @@ $('menuDictionary').addEventListener('click', (e) => {
   try {
     await loadRevision();
     await loadRules();
+    // a batch started before a reload is still running somewhere
+    const last = await api('/dqc/revisions/' + encodeURIComponent(revisionId) + '/jobs');
+    if (last && last.job_id && last.status !== 'completado' && last.status !== 'error') {
+      const job = await followJob(last.job_id);
+      await loadRevision();
+      await loadRules();
+      leftMessage(jobSummary(job), job.status === 'error');
+    }
   } catch (err) {
     leftMessage(err.message, true);
   }

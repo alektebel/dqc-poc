@@ -100,6 +100,11 @@ def _now() -> str:
 def connect(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
+    # A batch runs its rules in parallel, each thread with its own
+    # connection to this file. Without a busy timeout the second writer to
+    # arrive fails outright ("database is locked") instead of waiting the
+    # few milliseconds the first one needs.
+    conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
     _migrate(conn)
