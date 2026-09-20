@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <title>Data Quality Assistant – Revisiones</title>
+
+    <!-- Fuente -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --pwc-orange: #FD5108;
+            --primary: #FD5108;
+            --text-main: #111827;
+            --text-muted: #6b7280;
+            --border-gray: #e5e7eb;
+            --bg-chip: #f3f4f6;
+            --row-hover: #f9fafb;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 0;
+            color: var(--text-main);
+            background: #ffffff;
+        }
+
+        .page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+
+	.header {
+    	background: var(--pwc-orange);
+    	color: #ffffff;
+    	padding: 8px 28px;          /* igual que en rules.html */
+    	display: flex;
+    	align-items: center;
+    	justify-content: space-between;
+	}
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo img { height: 30px; }
+
+        .logo-text-main { font-weight: 600; font-size: 18px; }
+
+        .logo-text-sub { font-size: 12px; opacity: 0.9; }
+
+        .header-right {
+            font-size: 12px;
+            opacity: 0.9;
+            text-align: right;
+        }
+
+        /* Main */
+
+        .main {
+            flex: 1;
+            padding: 24px 32px 40px;
+        }
+
+        .content {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .page-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .page-title h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+
+        .page-title p {
+            margin: 4px 0 0;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .btn-primary {
+            background-color: var(--primary);
+            color: #ffffff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .btn-primary:hover { background-color: #e04807; }
+
+        /* Filtros / chips */
+
+        .filters {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            font-size: 12px;
+        }
+
+        .chips {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .chip {
+            padding: 4px 8px;
+            border-radius: 999px;
+            background: #f3f4f6;
+            color: #374151;
+            cursor: default;
+        }
+
+        .chip-clickable {
+            cursor: pointer;
+        }
+
+        .chip-clickable:hover {
+            background: #e5e7eb;
+        }
+
+        .search-box input {
+            padding: 6px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--border-gray);
+            font-size: 12px;
+            width: 200px;
+        }
+
+        /* Tabla revisiones */
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-top: 8px;
+        }
+
+        th, td {
+            padding: 10px 8px;
+            border-bottom: 1px solid var(--border-gray);
+            text-align: left;
+        }
+
+        th {
+            background: #f9fafb;
+            font-weight: 600;
+        }
+
+        tr:hover {
+            background: var(--row-hover);
+        }
+
+        .status-pill {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+        }
+
+        .status-pending {
+            background: #eff6ff;
+            color: #1d4ed8;
+        }
+
+        .status-running {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-complete {
+            background: #ecfdf3;
+            color: #166534;
+        }
+
+        .status-error {
+            background: #fef2f2;
+            color: #b91c1c;
+        }
+
+        .link-secondary {
+            color: var(--primary);
+            text-decoration: none;
+            font-size: 12px;
+        }
+
+        .link-secondary:hover {
+            text-decoration: underline;
+        }
+
+        .empty-state {
+            padding: 32px 0;
+            text-align: center;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        /* Añadidos al cablear: chip de filtro activo y acción destructiva. */
+        .chip-active {
+            background: var(--primary);
+            color: #ffffff;
+        }
+
+        .link-danger {
+            color: var(--text-muted);
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+<div class="page">
+    <header class="header">
+        <div class="logo">
+            <img src="assets/logo.png" alt="" onerror="this.style.display='none'" />
+            <div>
+                <div class="logo-text-main">Data Quality Assistant</div>
+                <div class="logo-text-sub">PwC · Validador inteligente de BBDD</div>
+            </div>
+        </div>
+        <div class="header-right">
+            Panel de revisiones de calidad de datos
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="content">
+            <div class="page-title">
+                <div>
+                    <h1>Revisiones de calidad de datos</h1>
+                    <p>
+                        Consulta revisiones anteriores, su estado y vuelve a abrirlas.
+                        Crea nuevas revisiones para analizar otras tablas.
+                    </p>
+                </div>
+                <button class="btn-primary" onclick="window.location.href='index.html'">
+                    Nueva revisión
+                </button>
+            </div>
+
+            <div class="filters">
+                <div class="chips" id="chips"></div>
+                <div class="search-box">
+                    <input type="text" id="search" placeholder="Buscar por nombre, tabla…" />
+                </div>
+            </div>
+
+            <table id="table" hidden>
+                <thead>
+                    <tr>
+                        <th>Nombre de la revisión</th>
+                        <th>Tabla</th>
+                        <th>Estado</th>
+                        <th>Última ejecución</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody id="rows"></tbody>
+            </table>
+
+            <div class="empty-state" id="empty">Cargando revisiones…</div>
+        </div>
+    </main>
+</div>
+
+<script src="assets/api.js"></script>
+<script>
+    const ESTADOS = {
+        pendiente:    { label: 'Pendiente',       cls: 'status-pending'  },
+        en_ejecucion: { label: 'En ejecución',    cls: 'status-pending'  },
+        completada:   { label: 'Completada',      cls: 'status-complete' },
+        error:        { label: 'Error ejecución', cls: 'status-error'    },
+    };
+
+    let revisions = [];
+    let filter = '';
+
+    function matches(rev) {
+        const needle = document.getElementById('search').value.trim().toLowerCase();
+        if (filter && rev.status !== filter) return false;
+        if (!needle) return true;
+        return (rev.name + ' ' + (rev.data_filename || '')).toLowerCase().includes(needle);
+    }
+
+    function render() {
+        const counts = { pendiente: 0, en_ejecucion: 0, completada: 0, error: 0 };
+        revisions.forEach((r) => { counts[r.status] = (counts[r.status] || 0) + 1; });
+        document.getElementById('chips').innerHTML =
+            `<span class="chip">Total: ${revisions.length}</span>` +
+            Object.entries(ESTADOS).map(([key, meta]) =>
+                `<span class="chip chip-clickable${filter === key ? ' chip-active' : ''}" ` +
+                `data-status="${key}">${meta.label}: ${counts[key] || 0}</span>`).join('');
+
+        const shown = revisions.filter(matches);
+        const rows = document.getElementById('rows');
+        rows.innerHTML = shown.map((rev) => {
+            const meta = ESTADOS[rev.status] || ESTADOS.pendiente;
+            const next = rev.dictionary_filename
+                ? `rules.html?rev=${encodeURIComponent(rev.revision_id)}`
+                : `dictionary.html?rev=${encodeURIComponent(rev.revision_id)}`;
+            const label = rev.dictionary_filename
+                ? (rev.rules_total ? 'Ver resultados' : 'Definir reglas')
+                : 'Continuar (diccionario)';
+            return `<tr>
+                <td>${escapeHtml(rev.name)}</td>
+                <td>${escapeHtml(rev.data_filename || '–')}</td>
+                <td><span class="status-pill ${meta.cls}">${meta.label}</span></td>
+                <td>${formatDate(rev.updated_at || rev.created_at)}</td>
+                <td>
+                    <a href="${next}" class="link-secondary">${label}</a>
+                    <a href="#" class="link-secondary link-danger"
+                       data-delete="${escapeHtml(rev.revision_id)}">Eliminar</a>
+                </td>
+            </tr>`;
+        }).join('');
+
+        document.getElementById('table').hidden = shown.length === 0;
+        const empty = document.getElementById('empty');
+        empty.hidden = shown.length > 0;
+        empty.textContent = revisions.length
+            ? 'Ninguna revisión coincide con el filtro.'
+            : 'Aún no hay revisiones creadas. Haz clic en "Nueva revisión" para empezar.';
+    }
+
+    async function load() {
+        try {
+            revisions = await api('/dqc/revisions');
+            render();
+        } catch (err) {
+            document.getElementById('empty').textContent =
+                'No se pudieron cargar las revisiones: ' + err.message;
+        }
+    }
+
+    document.getElementById('chips').addEventListener('click', (e) => {
+        const chip = e.target.closest('[data-status]');
+        if (!chip) return;
+        filter = filter === chip.dataset.status ? '' : chip.dataset.status;
+        render();
+    });
+
+    document.getElementById('search').addEventListener('input', render);
+
+    document.getElementById('rows').addEventListener('click', async (e) => {
+        const link = e.target.closest('[data-delete]');
+        if (!link) return;
+        e.preventDefault();
+        const rev = revisions.find((r) => r.revision_id === link.dataset.delete);
+        if (!window.confirm(`Eliminar "${rev.name}" y sus ${rev.rules_total} regla(s)?`)) return;
+        await api('/dqc/revisions/' + encodeURIComponent(rev.revision_id), { method: 'DELETE' });
+        load();
+    });
+
+    load();
+</script>
+</body>
+</html>

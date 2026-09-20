@@ -1,18 +1,17 @@
-# DQC PoC — local stack (Linux / macOS / Windows via Docker Desktop).
+# Data Quality Assistant — local stack.
 #
-#   docker compose up --build                      start API + DQC Studio
-#   docker compose --profile ollama up --build     start everything incl. Ollama + model pull
-#   docker compose down                            stop and remove containers
-#   docker compose down -v                         also drop the cached Ollama models (~9 GB)
+#   docker compose up --build                    the app (API + UI) on :8000
+#   docker compose --profile ollama up --build   the app plus a local model
+#   docker compose down                          stop
+#   docker compose down -v                       also drop the cached models
 #
-# Open http://localhost:4200 for the DQC Studio UI.
+# Open http://localhost:8000 — the API serves the four screens itself, so
+# there is no second container and no proxy configuration.
 #
 # Configuration via .env (see .env.example):
-#   OLLAMA_MODEL   model tag pulled when using the ollama profile (default: qwen3:4b)
-#   API_PORT       host port for the FastAPI service  (default: 8000)
-#   DQC_PORT       host port for the DQC Studio UI     (default: 4200)
-#   OLLAMA_PORT    host port for the Ollama server     (default: 11434)
-#   REGLLM_LLM    LLM backend: auto | ollama | bedrock | stub
+#   REGLLM_LLM     LLM backend: auto | api | ollama | bedrock | stub
+#   OLLAMA_MODEL   model pulled by the ollama profile (default: qwen3:4b)
+#   APP_PORT       host port for the app (default: 8000)
 
 name: dqc-poc
 
@@ -56,25 +55,22 @@ services:
         fi
     restart: "no"
 
-  api:
+  app:
     build:
       context: .
       dockerfile: Dockerfile
-    image: dqc-poc-api:latest
-    container_name: dqc-poc-api
+    image: dqc-poc-app:latest
+    container_name: dqc-poc-app
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "${APP_PORT:-8000}:8000"
     environment:
       # List form: a bare NAME passes the host value through ONLY if it is set.
       # Map form would set it to "" instead, and botocore rejects an empty
       # AWS_PROFILE with ProfileNotFound.
       - LOG_LEVEL=INFO
-      - CORS_ORIGINS=*
-      - REGLLM_ROUTERS=dqc,dqc_consistency
-      # Generation backend. Default now uses the "nan" OpenAI-compatible
-      # endpoint (qwen3.6). Override per command, e.g. REGLLM_LLM=ollama
-      # docker compose up -d api, or set REGLLM_LLM=stub for a no-model run.
-      # REGLLM_LLM=bedrock uses Amazon Nova via the credentials below.
+      - REGLLM_ROUTERS=dqc,revisions
+      # Generation backend. REGLLM_LLM=stub runs the app with no model at
+      # all (wiring works, generated controls are placeholders).
       - REGLLM_LLM=${REGLLM_LLM:-api}
       - REGLLM_API_URL=${REGLLM_API_URL:-https://api.nan.builders}
       - REGLLM_API_KEY=${NAN_API_KEY:-}
@@ -86,14 +82,15 @@ services:
       - BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID:-eu.amazon.nova-micro-v1:0}
       - BEDROCK_REGION=${BEDROCK_REGION:-eu-west-1}
       - REGLLM_LLM_TIMEOUT=${REGLLM_LLM_TIMEOUT:-120}
-      # Credentials for REGLLM_LLM=bedrock. Either export these, or rely on the
-      # read-only ~/.aws mount below.
+      # Credentials for REGLLM_LLM=bedrock. Either export these, or rely on
+      # the read-only ~/.aws mount below.
       - AWS_PROFILE
       - AWS_REGION
       - AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN
     volumes:
+      # The revisions, their uploaded files and the generated controls.
       - ./data:/app/data
       # Read-only host credentials, so REGLLM_LLM=bedrock works without
       # copying keys into the environment. Harmless when ~/.aws is absent.
@@ -108,20 +105,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
-    restart: unless-stopped
-
-  studio:
-    build:
-      context: ./DQC/studio
-    image: dqc-poc-studio:latest
-    container_name: dqc-poc-studio
-    depends_on:
-      api:
-        condition: service_healthy
-    ports:
-      - "${DQC_PORT:-4200}:80"
-    environment:
-      API_UPSTREAM: "dqc-poc-api:8000"
     restart: unless-stopped
 
 volumes:

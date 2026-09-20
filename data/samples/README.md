@@ -1,29 +1,15 @@
-# Sample data
+# Datos de ejemplo
 
-Sample inputs for the DQC generator PoC — enough to run the whole flow
-(dictionary inspection → generation → cases evaluation) without a real
-bank extract.
+Suficiente para recorrer el flujo entero (revisión → diccionario → reglas →
+informe) sin un extracto real de banco.
 
-| File | What it is |
+| Fichero | Qué es |
 |---|---|
-| `dqc_field_dictionary.xlsx` | The bundled **field dictionary** (2 sheets: a "Notas" cover + the dictionary). The DQC generator reads this to know each field's name, type, description, nullability and formula. |
-| `diccionario_demo.xlsx` | The demo dictionary used by the scripted demo (`demo/demo_server.py`) and the DQC Studio's `?demo=1` mode. |
-| `casos_demo.xlsx` | The demo **extracted-cases** workbook: each row violates exactly one known rule, so a generated check can be scored for precision/recall. |
-| `recuperatory_cycles.csv` | A 22k-row synthetic **recuperation-cycles dataset** (`mylib.ciclos_recuperacion`). It is the base table the coherence rules in `training/dq/coherence_rules.py` are verified against (0 violations by construction). |
-| `reglas_demo.txt` | The natural-language rule list the demo exercises — one rule per branch of the ReAct pipeline. |
-| `irb_schema.sql` | The IRB / IFRS 9 schema the dataset is modelled on (reference only). |
+| `dqc_field_dictionary.xlsx` | Diccionario de campos con 2 hojas (una portada "Notas" + el diccionario). Sirve para comprobar la selección de hoja. |
+| `diccionario_demo.xlsx` | Diccionario de una sola hoja, el camino corto. |
+| `casos_demo.xlsx` | Tabla de casos: cada fila incumple exactamente una regla conocida, de modo que un control generado puede puntuarse en precisión/recall. |
+| `reglas_demo.txt` | Lista de reglas en lenguaje natural — una por rama del pipeline. |
 
-## How the pieces fit
-
-1. **`dqc_field_dictionary.xlsx`** → upload to `/api/dqc/generate` (or the
-   Studio's **Generar** screen) as the dictionary.
-2. **`reglas_demo.txt`** → paste into the rules textarea (one rule per line).
-3. **`casos_demo.xlsx`** → upload as the optional data-cases Excel so each
-   generated check reports the example violating rows and its
-   precision/recall.
-
-Regenerate the demo Excels at any time with:
-
-```bash
-python demo/make_fixtures.py
-```
+Uso: `diccionario_demo.xlsx` en el paso 2 y `casos_demo.xlsx` como tabla del
+paso 1; luego pega las líneas de `reglas_demo.txt` o súbelo entero en el
+paso 3.

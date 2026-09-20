@@ -25,7 +25,6 @@ historically flagged cases.
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import re
@@ -33,6 +32,7 @@ import sqlite3
 from typing import Any
 
 from . import dqc_dictionary as dict_ai
+from . import tabular
 
 logger = logging.getLogger(__name__)
 
@@ -45,22 +45,6 @@ MAX_FETCH_ROWS = 500      # hard cap when executing a query on the cases
 
 _PREV_ID_RE = re.compile(
     r"^\s*(?:\[(?P<braced>[A-Za-z][\w.-]*)\]|(?P<bare>DQC[\w.-]*))\s*[:\-–—]?\s+")
-
-
-def _field_embedder():
-    """Tier-1 semantic field filter embedder, only when opted in via
-    REGLLM_DQC_SEMANTIC_FIELDS. Returns the shared embedding service (which
-    itself degrades to zero vectors when no backend is reachable) or None so
-    field selection stays purely lexical by default."""
-    if (os.getenv("REGLLM_DQC_SEMANTIC_FIELDS") or "").lower() not in (
-            "1", "true", "yes", "on"):
-        return None
-    try:
-        from src.knowledge.embeddings import get_embedding_service
-        return get_embedding_service()
-    except Exception as exc:  # noqa: BLE001 — embeddings optional
-        logger.warning("embedding service unavailable: %s", exc)
-        return None
 
 
 def split_prev_id(line: str) -> tuple[str | None, str]:
@@ -93,8 +77,7 @@ Responde SOLO JSON:
 def check_sufficiency(rule: str, fields: list, client) -> dict:
     """Fresh-context sufficiency agent + deterministic field verification."""
     field_names = {f.name.upper() for f in fields}
-    relevant = dict_ai.select_relevant_fields(fields, [rule],
-                                              embedder=_field_embedder())
+    relevant = dict_ai.select_relevant_fields(fields, [rule])
     dict_text, _ = dict_ai.fields_to_text(relevant)
     user = f"REGLA DQC:\n{rule}\n\nDICCIONARIO DE CAMPOS:\n{dict_text}"
 
@@ -181,8 +164,7 @@ def generate_sas(rule: str, fields: list, table_name: str, client,
     from the previous attempt for the correction loop; ``valores`` carries
     sampled real domain values (value grounding)."""
     hint = [rule] + ([" ".join(campos)] if campos else [])
-    relevant = dict_ai.select_relevant_fields(fields, hint,
-                                              embedder=_field_embedder())
+    relevant = dict_ai.select_relevant_fields(fields, hint)
     dict_text, sent = dict_ai.fields_to_text(relevant)
     user = (
         f"Tabla objetivo: {table_name}\n\n"
@@ -444,28 +426,25 @@ def _coerce(value: Any) -> Any:
     return str(value)
 
 
-def load_cases(data: bytes, table_name: str) -> CasesContext:
-    """Parse the cases Excel (first sheet; first non-empty row = headers;
-    optional DQC_ID label column) into a queryable context."""
-    import openpyxl
-
-    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True,
-                                data_only=True)
-    ws = wb.active
+def load_cases(data: bytes, table_name: str,
+               filename: str | None = None) -> CasesContext:
+    """Parse the data table — .xlsx (first sheet) or .csv — into a
+    queryable context. First non-empty row = headers; a DQC_ID-style
+    column, when present, labels each row with the controls that flagged
+    it historically."""
+    _, all_rows = tabular.first_sheet(data, filename=filename)
     headers: list[str] = []
     rows: list[tuple] = []
-    if ws is not None:
-        for row in ws.iter_rows(values_only=True):
-            if row is None or all(v is None or str(v).strip() == ""
-                                  for v in row):
-                continue
-            if not headers:
-                headers = [str(v or "").strip() for v in row]
-                continue
-            rows.append(row)
-    wb.close()
+    for row in all_rows:
+        if row is None or all(v is None or str(v).strip() == ""
+                              for v in row):
+            continue
+        if not headers:
+            headers = [str(v or "").strip() for v in row]
+            continue
+        rows.append(row)
     if not headers:
-        raise ValueError("El Excel de datos no tiene cabeceras")
+        raise ValueError("El fichero de datos no tiene cabeceras")
     label_idx = next((i for i, h in enumerate(headers)
                       if h.lower() in _LABEL_HEADERS), None)
     return CasesContext(headers, rows, label_idx, table_name)

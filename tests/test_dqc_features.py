@@ -2,7 +2,6 @@
   * BCBS 239 classification (module + fallback on persist)
   * case-explanation endpoint (/dqc/checks/{id}/explain)
   * feedback endpoint (/dqc/checks/{id}/feedback)
-  * consistency-rules endpoint (/dqc/consistency_rules)
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ os.environ.setdefault("REGLLM_LLM", "stub")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import api.routers.dqc as dqc_router  # noqa: E402
-import api.routers.dqc_consistency as consistency  # noqa: E402
 from api.main import app  # noqa: E402
 from src.knowledge import bcbs239  # noqa: E402
 from training.dq import checks_db  # noqa: E402
@@ -89,7 +87,6 @@ def _insert_check(conn, *, status="pending", sql="SELECT 1", name="chk"):
 def _wire(monkeypatch, fake):
     monkeypatch.setattr(dqc_router, "get_client", lambda: fake)
     monkeypatch.setattr(dqc_router, "get_inspect_client", lambda: fake)
-    monkeypatch.setattr(consistency, "get_client", lambda: fake)
 
 
 # ── BCBS 239 module ──────────────────────────────────────────────────────────
@@ -115,40 +112,7 @@ def test_bcbs_default_for_type():
     assert bcbs239.default_for_type("consistencia") == "P13"
 
 
-# ── consistency endpoint ─────────────────────────────────────────────────────
-
-def test_consistency_rules_endpoint(client, monkeypatch, isolated_checks_db):
-    fake = _FakeClient([
-        {"dqcs": [{
-            "dqc_id": "DQC_COD_GESTOR_001", "variable": "COD_GESTOR",
-            "descripcion": "Gestor existe en maestro",
-            "tipo": "referencial", "severidad": "bloqueante",
-            "regla_sql": "SELECT * FROM mylib.ciclos_recuperacion WHERE COD_GESTOR IS NOT NULL",
-            "condicion_error": "código de gestor huérfano",
-            "bcbs239": "P13 — Reconciliation",
-        }]},
-    ])
-    _wire(monkeypatch, fake)
-    schema = json.dumps({"tables": [{
-        "name": "mylib.maestro_gestores",
-        "columns": [{"name": "COD_GESTOR", "type": "TEXT", "description": "PK"}],
-    }]})
-    resp = client.post(
-        "/dqc/consistency_rules",
-        data={"database_schema": schema, "sheet": "Sheet"},
-        files={"dictionary": ("d.xlsx", _make_dict_xlsx(),
-                              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert len(body["dqcs"]) == 1
-    assert "COD_GESTOR" in body["dqcs"][0]["variable"]
-    # persisted with a BCBS 239 label
-    conn = sqlite3.connect(isolated_checks_db)
-    row = conn.execute("SELECT bcbs239 FROM checks").fetchone()
-    assert row[0] == "P13 — Reconciliation"
-
-
-# ── feedback endpoint ────────────────────────────────────────────────────────
+# ── reviewer feedback ────────────────────────────────────────────────────────
 
 def test_feedback_endpoint_roundtrip(client, isolated_checks_db):
     conn = checks_db.connect()

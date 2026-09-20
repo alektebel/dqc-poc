@@ -244,22 +244,6 @@ def test_surrogate_on_empty_units():
     assert report.attributions == [] and report.calls == 0
 
 
-def test_build_prompt_puts_the_response_last():
-    """Teacher forcing requires the scored tokens to be conditioned on the
-    context, so the response must be the tail of the prompt."""
-    from src.knowledge.logprob_scoring import build_prompt
-    units = units_from_fields([_Field("PD_ESTIMADA", description="probabilidad")])
-    prompt = build_prompt(units, "SELECT PD_ESTIMADA FROM t")
-    assert prompt.rstrip().endswith("SELECT PD_ESTIMADA FROM t")
-    assert "PD_ESTIMADA" in prompt.split("RESPUESTA:")[0]
-
-
-def test_openai_scorer_refuses_without_configuration():
-    from src.knowledge.logprob_scoring import LogprobUnavailable, openai_logprob_scorer
-    with pytest.raises(LogprobUnavailable):
-        openai_logprob_scorer("SELECT 1", base_url="", model="")
-
-
 # ── claimed vs actual reconciliation (free grounding signal) ─────────────
 
 def test_reconcile_confirms_a_truthful_claim():

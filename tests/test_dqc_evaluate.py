@@ -140,4 +140,4 @@ def test_evaluate_corrupt_data_file_is_400(client, isolated_checks_db):
         "data_file": ("casos.xlsx", b"not a zip",
                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
     assert resp.status_code == 400
-    assert "No se pudo leer el Excel" in resp.json()["detail"]
+    assert "No se pudo leer el fichero" in resp.json()["detail"]

@@ -5,13 +5,13 @@
 #
 # For a standalone GGUF backend (no Ollama server — loads the weight file
 # directly in-process via llama-cpp-python), set backend: "gguf" and
-# gguf_model_path below instead. See docs/DEPLOYMENT.md.
+# gguf_model_path below instead. 
 #
 # For Amazon Bedrock (managed, no local weights at all), set backend:
 # "bedrock" and bedrock_model_id/bedrock_region below. Auth is via the
 # standard AWS credential chain (IAM role, ~/.aws/credentials, or
 # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars) — nothing to configure
-# here beyond the model/region. See docs/DEPLOYMENT.md.
+# here beyond the model/region. 
 
 # Chat/reasoning LLM — maintains the knowledge graph, runs agentic Q&A
 llm:
@@ -66,27 +66,3 @@ llm:
   # inspect_gguf_n_ctx: 4096
   # inspect_gguf_n_gpu_layers: 0    # >0 to offload layers to GPU
 
-# Embedding model — encodes regulation text into the vector store.
-# Used both by the ChromaDB-backed knowledge-graph RAG (src/knowledge/
-# vector_store.py) and the dependency-free regulation RAG
-# (src/knowledge/regulation_vector_store.py, scripts/build_regulation_embeddings.py).
-# DQC field retrieval (Tier-1 schema-linking filter). Off by default: field
-# selection is lexical only. Set REGLLM_DQC_SEMANTIC_FIELDS=1 to blend in a
-# semantic channel using the embedding model below, so fields relevant to a
-# rule but sharing no literal words are still surfaced. Needs an embedding
-# backend reachable (Ollama/Bedrock); degrades to lexical if not.
-
-embedding:
-  model: "nomic-embed-text"  # local GGUF via Ollama
-  dim: 768
-  backend: "auto"             # auto | ollama | gguf | bedrock | stub
-  ollama_url: "http://localhost:11434"
-  # gguf_model_path: "/home/user/models/nomic-embed-text-v1.5.Q8_0.gguf"
-  # bedrock_embed_model_id: "amazon.titan-embed-text-v2:0"
-  # bedrock_region: "eu-west-1"
-
-# Knowledge graph persistence paths
-knowledge:
-  graph_db: "data/knowledge/graph"
-  vector_db: "data/knowledge/vectors"
-  collection: "regllm"

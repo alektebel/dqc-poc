@@ -220,7 +220,7 @@ def test_inspect_corrupt_xlsx_returns_400_not_500(client):
     resp = client.post("/dqc/inspect_dictionary",
                        files=_upload(b"not really a zip"))
     assert resp.status_code == 400
-    assert "No se pudo leer el Excel" in resp.json()["detail"]
+    assert "No se pudo leer el fichero" in resp.json()["detail"]
 
 
 def test_generate_corrupt_xlsx_returns_400_not_500(client, monkeypatch):

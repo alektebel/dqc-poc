@@ -33,6 +33,8 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+from . import tabular
+
 logger = logging.getLogger(__name__)
 
 # ── budgets (chars ≈ tokens×4; sized for an 8k-token local context) ─────────
@@ -123,16 +125,14 @@ def _score_sheet(info: SheetInfo) -> int:
     return score
 
 
-def inspect_workbook(data: bytes) -> Inspection:
-    import openpyxl
-
-    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+def inspect_workbook(data: bytes, filename: str | None = None) -> Inspection:
+    """Inspect every sheet of an .xlsx — or the single sheet a .csv is."""
     inspection = Inspection()
-    for ws in wb.worksheets:
+    for name, rows in tabular.read_sheets(data, filename):
         headers: list[str] = []
         samples: list[list[str]] = []
         n_rows = 0
-        for i, row in enumerate(ws.iter_rows(values_only=True)):
+        for row in rows:
             if row is None or all(v is None or str(v).strip() == "" for v in row):
                 continue
             cells = [str(v or "").strip()[:CELL_TRUNC] for v in row]
@@ -142,11 +142,10 @@ def inspect_workbook(data: bytes) -> Inspection:
             n_rows += 1
             if len(samples) < SAMPLE_ROWS:
                 samples.append(cells)
-        info = SheetInfo(name=ws.title, n_rows=n_rows,
+        info = SheetInfo(name=name, n_rows=n_rows,
                          headers=headers, samples=samples)
         info.score = _score_sheet(info)
         inspection.sheets.append(info)
-    wb.close()
     return inspection
 
 
@@ -264,25 +263,18 @@ class FieldEntry:
 
 
 def parse_dictionary(data: bytes, sheet: str | None = None,
-                     mapping: dict | None = None) -> list[FieldEntry]:
+                     mapping: dict | None = None,
+                     filename: str | None = None) -> list[FieldEntry]:
     """Read the field dictionary using an explicit sheet + column mapping
     (falling back to heuristics for anything unmapped)."""
-    import openpyxl
-
-    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    ws = wb[sheet] if sheet and sheet in wb.sheetnames else wb.active
-    if ws is None:
-        wb.close()
-        return []
-
-    rows_iter = ws.iter_rows(values_only=True)
+    _, all_rows = tabular.first_sheet(data, sheet, filename)
+    rows_iter = iter(all_rows)
     header_row = None
     for row in rows_iter:
         if row and any(v is not None and str(v).strip() for v in row):
             header_row = row
             break
     if not header_row:
-        wb.close()
         return []
     headers = [str(c or "").strip() for c in header_row]
 
@@ -315,7 +307,6 @@ def parse_dictionary(data: bytes, sheet: str | None = None,
             name=name, type=cell("type"), description=cell("description"),
             nullable=cell("nullable"), formula=cell("formula"),
             reg_ref=cell("reg_ref")))
-    wb.close()
     return fields
 
 

@@ -20,14 +20,12 @@ The repo contains two coupled deliverables:
 
 | Piece | Path | State |
 |---|---|---|
-| DQC generator API | `api/routers/dqc.py` | Working: variable extraction → RAG context (SAS formula, lineage, regulation graph, docs) → LLM → structured DQC items → validation store |
-| Angular chat UI | `DQC/app/` | Working: generate, batch-stream, validate/reject, UNION-ALL dashboard export |
-| AWS deployment | `DQC/cdk/`, `DQC/terraform/`, `DQC/.github/workflows/` | Deployable: ECS Fargate (api + nginx sidecar), ALB, ECR, Bedrock (Nova Micro via cross-region inference profile) |
+| DQC generator API | `api/routers/dqc.py` | Working: rule → sufficiency → SQL generation → static/dynamic validation → correction → structured DQC items → validation store |
+| Revisions + UI | `api/routers/revisions.py`, `web/` | Working: create a revision, add rules one at a time or in batch, validate/reject, UNION-ALL report |
 | Eval harness | `DQC/eval/` | Working: 26 ground-truth defects over 8 DQ dimensions, clean DB + per-defect trap DBs (mutation testing), 5-component verifiable reward, per-dimension deficiency report |
-| RL training | `training/dq/` | GRPO pipeline that shares the same reward definition |
 
-The strongest design decision in the repo is that **the eval harness, the RL
-reward, and the runtime scoring all share the same verifiable contract**:
+The strongest design decision in the repo is that **the eval harness and the
+runtime scoring share the same verifiable contract**:
 a check is good iff it parses, returns 0 rows on a clean-by-construction DB,
 and ≥1 row on a DB where exactly one invariant was broken. This is
 mutation testing applied to data quality, it needs no LLM judge, and it is

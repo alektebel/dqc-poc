@@ -25,7 +25,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from training.dq.coherence_rules import PK_COLUMN
+# Dashboard contract: every check's SQL must SELECT this column, so the
+# UNION ALL can project one normalised violation rowset whatever each
+# check selects alongside it.
+PK_COLUMN = "ID_CONTR_CICLO_LGD"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DB_PATH = Path(os.getenv("REGLLM_CHECKS_DB", PROJECT_ROOT / "data" / "dq" / "checks.db"))
@@ -237,12 +240,20 @@ def get_check(conn: sqlite3.Connection, check_id: str) -> dict | None:
     return _row_to_dict(r) if r else None
 
 
-def counts(conn: sqlite3.Connection) -> dict[str, int]:
-    """Breakdown by status × visibility — drives the dashboard-ready flag."""
+def counts(conn: sqlite3.Connection,
+           project_id: str | None = None) -> dict[str, int]:
+    """Breakdown by status × visibility — drives the dashboard-ready flag.
+
+    Scoped to one revision when ``project_id`` is given, so a revision's
+    report does not wait on unrelated controls being reviewed.
+    """
     out = {"pending_visible": 0, "validated": 0, "rejected": 0, "oculto": 0}
-    for r in conn.execute(
-        "SELECT status, visible, COUNT(*) AS n FROM checks GROUP BY status, visible"
-    ):
+    q = "SELECT status, visible, COUNT(*) AS n FROM checks"
+    params: list[Any] = []
+    if project_id is not None:
+        q += " WHERE project_id=?"; params.append(project_id)
+    q += " GROUP BY status, visible"
+    for r in conn.execute(q, params):
         s, v, n = r["status"], r["visible"], r["n"]
         if s == "pending" and v:
             out["pending_visible"] += n
@@ -260,6 +271,7 @@ def build_dashboard_query(
     conn: sqlite3.Connection,
     *,
     status: str = "validated",
+    project_id: str | None = None,
 ) -> str | None:
     """UNION ALL of every validated check's per-PK violations.
 
@@ -270,7 +282,7 @@ def build_dashboard_query(
 
     Returns ``None`` when there are no checks of the requested status.
     """
-    rows = list_checks(conn, status=status)
+    rows = list_checks(conn, status=status, project_id=project_id)
     if not rows:
         return None
     parts: list[str] = []
@@ -290,9 +302,33 @@ def build_dashboard_query(
     return "\nUNION ALL\n".join(parts)
 
 
-def export_validated(conn: sqlite3.Connection) -> list[dict]:
+def export_validated(conn: sqlite3.Connection,
+                     project_id: str | None = None) -> list[dict]:
     """All validated checks as plain dicts — fuels the UI's copy-all button."""
-    return list_checks(conn, status="validated")
+    return list_checks(conn, status="validated", project_id=project_id)
+
+
+def set_sql(conn: sqlite3.Connection, check_id: str, *, sql: str,
+            description: str = "", condicion_error: str = "",
+            campos_entrada: list[str] | None = None) -> bool:
+    """Replace a control's query after a re-run regenerated it.
+
+    The control keeps its id, its status and its review history — the
+    reviewer asked for THIS rule to be re-derived, not for a new one.
+    """
+    sets = ["sql=?"]
+    params: list[Any] = [sql]
+    if description:
+        sets.append("description=?"); params.append(description)
+    if condicion_error:
+        sets.append("condicion_error=?"); params.append(condicion_error)
+    if campos_entrada is not None:
+        sets.append("campos_entrada=?"); params.append(json.dumps(campos_entrada))
+    params.append(check_id)
+    cur = conn.execute(f"UPDATE checks SET {', '.join(sets)} WHERE check_id=?",
+                       params)
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def delete_check(conn: sqlite3.Connection, check_id: str) -> bool:

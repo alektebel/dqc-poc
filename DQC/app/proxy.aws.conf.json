@@ -1,6 +1,0 @@
-{
-  "/api": {
-    "target": "YOUR_API_GATEWAY_URL",
-    "secure": true
-  }
-}

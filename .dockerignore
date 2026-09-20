@@ -1,4 +1,4 @@
-# Keep the API image build context lean.
+# Keep the image build context lean.
 .git
 .venv/
 venv/
@@ -7,14 +7,10 @@ __pycache__/
 .pytest_cache/
 .env
 DQC/
-demo/
 docs/
+llm-council/
 tests/
 scripts/
-PwC color palette webapp (1).zip
 data/dq/
-data/sas/
-data/sessions/
-data/knowledge/
+data/revisions/
 data/samples/
-data/changelog/

@@ -13,6 +13,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 # Ensure project root is on sys.path so ``import src...`` works
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -41,8 +43,8 @@ app.add_middleware(
 # generator surface only. Routers that fail to import (e.g. an optional
 # heavy dependency missing) are skipped with a warning instead of taking
 # the whole API down.
-_ALL_ROUTERS = ("dqc", "dqc_consistency")
-_enabled = [r.strip() for r in os.getenv("REGLLM_ROUTERS", "dqc,dqc_consistency").split(",") if r.strip()]
+_ALL_ROUTERS = ("dqc", "revisions")
+_enabled = [r.strip() for r in os.getenv("REGLLM_ROUTERS", "dqc,revisions").split(",") if r.strip()]
 if "all" in _enabled:
     _enabled = list(_ALL_ROUTERS)
 
@@ -54,6 +56,17 @@ for _name in _enabled:
         logging.getLogger(__name__).warning(
             "Router %r could not be mounted — skipping", _name, exc_info=True
         )
+
+
+# The four screens are served by this same app, so the browser talks to one
+# origin: no CORS, no second container, no proxy config to keep in sync.
+_WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+if _WEB_DIR.is_dir():
+    app.mount("/app", StaticFiles(directory=_WEB_DIR, html=True), name="app")
+
+    @app.get("/", include_in_schema=False)
+    def _home() -> RedirectResponse:
+        return RedirectResponse("/app/home.html")
 
 
 @app.get("/health")
