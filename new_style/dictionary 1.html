@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <title>Data Quality Assistant – Diccionario de datos</title>
+
+    <!-- Fuente -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --pwc-orange: #FD5108;   /* naranja PwC */
+            --primary: #FD5108;      /* botón del mismo color */
+            --text-main: #111827;
+            --text-muted: #6b7280;
+            --border-gray: #e5e7eb;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 0;
+            color: var(--text-main);
+            background: #ffffff;
+        }
+
+        .page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Encabezado */
+
+	.header {
+    	background: var(--pwc-orange);
+    	color: #ffffff;
+    	padding: 8px 28px;          
+    	display: flex;
+    	align-items: center;
+   	 justify-content: space-between;
+	}
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo img {
+            height: 30px;
+        }
+
+        .logo-text-main {
+            font-weight: 600;
+            font-size: 18px;
+        }
+
+        .logo-text-sub {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .header-right {
+            font-size: 13px;
+            opacity: 0.9;
+        }
+
+        /* Contenido */
+
+        .main {
+            flex: 1;
+            padding: 24px 32px 40px;
+        }
+
+        .layout {
+            max-width: 980px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+            gap: 40px;
+        }
+
+        /* Columna izquierda: formulario */
+
+        .form-section h1 {
+            margin: 0 0 6px;
+            font-size: 24px;
+        }
+
+        .form-section .subtitle {
+            margin-top: 0;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .form-card {
+            border: 1px solid var(--border-gray);
+            border-radius: 10px;
+            padding: 18px 20px 20px;
+        }
+
+        .form-group {
+            margin-bottom: 14px;
+        }
+
+        label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .required {
+            color: #ef4444;
+        }
+
+        input[type="file"] {
+            width: 100%;
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid #d1d5db;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.12s, box-shadow 0.12s;
+        }
+
+        input[type="file"]:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 1px rgba(253, 81, 8, 0.2);
+        }
+
+        button {
+            background-color: var(--primary);
+            color: #ffffff;
+            border: none;
+            padding: 9px 18px;
+            border-radius: 999px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        button:hover {
+            background-color: #e04807;
+        }
+
+        button:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        .message {
+            margin-top: 10px;
+            font-size: 13px;
+            padding: 8px 10px;
+            border-radius: 6px;
+        }
+
+        .message.error {
+            background-color: #fef2f2;
+            color: #b91c1c;
+            border: 1px solid #fecaca;
+        }
+
+        .message.success {
+            background-color: #ecfdf3;
+            color: #166534;
+            border: 1px solid #bbf7d0;
+        }
+
+        /* Columna derecha: ayuda */
+
+        .aside-section {
+            font-size: 13px;
+        }
+
+        .aside-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+        }
+
+        .aside-card {
+            border: 1px solid var(--border-gray);
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin-bottom: 12px;
+            background: #f9fafb;
+        }
+
+        .aside-card-highlight {
+            background: #fff6ee;
+            border-color: #fed7aa;
+        }
+
+        .aside-card-highlight strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .aside-list {
+            margin: 8px 0 0;
+            padding-left: 18px;
+            color: var(--text-muted);
+        }
+
+        .aside-list li {
+            margin-bottom: 4px;
+        }
+
+        .link-secondary {
+            display: inline-block;
+            margin-top: 10px;
+            font-size: 12px;
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        .link-secondary:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 900px) {
+            .layout {
+                grid-template-columns: minmax(0, 1fr);
+            }
+            .main {
+                padding: 20px 16px 32px;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="page">
+    <!-- Encabezado -->
+    <header class="header">
+        <div class="logo">
+            <img src="pwc-logo.png" alt="PwC logo" />
+            <div>
+                <div class="logo-text-main">Data Quality Assistant</div>
+                <div class="logo-text-sub">PwC · Validador inteligente de BBDD</div>
+            </div>
+        </div>
+        <div class="header-right">
+            Paso 2 de 3 · Diccionario de datos
+        </div>
+    </header>
+
+    <!-- Contenido -->
+    <main class="main">
+        <div class="layout">
+            <!-- Formulario -->
+            <section class="form-section">
+                <h1>Subir diccionario de datos</h1>
+                <p class="subtitle">
+                    Explica las columnas de la tabla que has subido en el paso anterior.
+                    El asistente utilizará este diccionario para entender el significado de cada campo.
+                </p>
+
+                <div class="form-card">
+                    <form id="dictionaryForm">
+                        <div class="form-group">
+                            <label for="dictionaryFile">
+                                Diccionario de datos (CSV/Excel) <span class="required">*</span>
+                            </label>
+                            <input
+                                type="file"
+                                id="dictionaryFile"
+                                name="dictionaryFile"
+                                accept=".csv,.xlsx"
+                                required
+                            />
+                        </div>
+
+                        <button type="submit">Guardar diccionario</button>
+
+                        <div id="message" class="message" style="display:none;"></div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Ayuda -->
+            <aside class="aside-section">
+                <div class="aside-title">¿Cómo debe ser el diccionario?</div>
+
+                <div class="aside-card aside-card-highlight">
+                    <strong>Contenido mínimo recomendado</strong>
+                    <span>
+                        Para cada columna indica nombre, tipo de dato y una descripción clara
+                        de qué representa en el contexto del negocio.
+                    </span>
+                </div>
+
+                <ul class="aside-list">
+                    <li>Incluye el nombre exacto de la columna tal y como aparece en el CSV.</li>
+                    <li>Marca si el campo es clave primaria o identificador de contrato/cliente.</li>
+                    <li>Incluye unidades (euros, días, porcentaje…) cuando aplique.</li>
+                    <li>Si conoces rangos esperados (edad, importes máximos, etc.), añádelos.</li>
+                </ul>
+
+                <a href="index.html" class="link-secondary">
+                    &larr; Volver al paso 1 (subida de BBDD)
+                </a>
+            </aside>
+        </div>
+    </main>
+</div>
+
+<script>
+    const form = document.getElementById("dictionaryForm");
+    const messageDiv = document.getElementById("message");
+
+    form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        messageDiv.style.display = "block";
+        messageDiv.textContent = "";
+        messageDiv.className = "message";
+
+        const dictionaryFile = document.getElementById("dictionaryFile").files[0];
+
+        if (!dictionaryFile) {
+            showMessage("Debes subir un fichero de diccionario.", "error");
+            return;
+        }
+
+        // Aquí, más adelante, llamaremos al backend para guardar el diccionario
+        showMessage(
+            "Diccionario validado y listo para guardar. El siguiente paso será definir y ejecutar las reglas de control.",
+            "success"
+        );
+    });
+
+    function showMessage(text, type) {
+        messageDiv.textContent = text;
+        messageDiv.className = "message " + type;
+        messageDiv.style.display = "block";
+    }
+</script>
+</body>
+</html>
