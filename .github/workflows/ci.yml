@@ -43,10 +43,15 @@ jobs:
       - name: Lint (imports muertos, nombres sin definir)
         run: python -m pyflakes api/ src/ training/ scripts/ tests/
 
+      # `python -m pytest`, no `pytest`: son invocaciones distintas — la
+      # primera pone el directorio de trabajo en sys.path y la segunda no.
+      # Verificar con una y ejecutar la otra es cómo esto llegó verde en
+      # local y rojo aquí. pytest.ini fija `pythonpath` para que ambas
+      # funcionen; el comando se alinea para que no vuelvan a divergir.
       - name: Tests
         env:
           REGLLM_LLM: stub
-        run: pytest -q
+        run: python -m pytest -q
 
   image:
     name: "Imagen: construir, arrancar y verificar"
