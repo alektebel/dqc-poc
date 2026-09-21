@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8" />
@@ -283,7 +284,7 @@
 <div class="page">
     <header class="header">
         <div class="logo">
-            <img src="assets/logo.png" alt="" onerror="this.style.display='none'" />
+            <img src="pwc-logo.png" alt="PwC logo" />
             <div>
                 <div class="logo-text-main">Data Quality Assistant</div>
                 <div class="logo-text-sub">PwC · Validador inteligente de BBDD</div>
@@ -351,13 +352,13 @@
 
                             <div class="form-group">
                                 <label for="csvFile">
-                                    Fichero de la BBDD (CSV o Excel) <span class="required">*</span>
+                                    Fichero CSV de la BBDD <span class="required">*</span>
                                 </label>
                                 <input
                                     type="file"
                                     id="csvFile"
                                     name="csvFile"
-                                    accept=".csv,.xlsx"
+                                    accept=".csv"
                                     required
                                 />
                             </div>
@@ -375,7 +376,7 @@
                     <div class="aside-title">¿Qué necesitas subir?</div>
 
                     <div class="aside-card aside-card-highlight">
-                        <strong>Tabla en CSV/Excel + descripción completa</strong>
+                        <strong>Tabla en CSV + descripción completa</strong>
                         <span>
                             Sube una tabla “plana” con todas las columnas relevantes y describe claramente
                             la estructura para que el asistente pueda entenderla.
@@ -398,7 +399,6 @@
     </main>
 </div>
 
-<script src="assets/api.js"></script>
 <script>
     const form = document.getElementById("createRevisionForm");
     const messageDiv = document.getElementById("message");
@@ -409,58 +409,54 @@
     descriptionEl.addEventListener("input", function () {
         const len = descriptionEl.value.length;
         descriptionHelper.textContent =
-            "Caracteres actuales: " + len +
+            "Caracteres actuales: " +
+            len +
             ". La descripción debe tener al menos 100 caracteres.";
     });
 
-    form.addEventListener("submit", async function (event) {
+    form.addEventListener("submit", function (event) {
         event.preventDefault();
-        showMessage("", "");
+        messageDiv.style.display = "block";
+        messageDiv.textContent = "";
+        messageDiv.className = "message";
 
         const revisionName = document.getElementById("revisionName").value.trim();
         const description = descriptionEl.value.trim();
-        const dataFile = document.getElementById("csvFile").files[0];
+        const csvInput = document.getElementById("csvFile");
+        const csvFile = csvInput.files[0];
 
         if (!revisionName) {
-            return showMessage("El nombre de la revisión es obligatorio.", "error");
+            showMessage("El nombre de la revisión es obligatorio.", "error");
+            return;
         }
-        if (description.length < 100) {
-            return showMessage(
-                "La descripción de la tabla es obligatoria y debe tener al menos 100 caracteres.",
-                "error");
-        }
-        if (!dataFile) {
-            return showMessage("Debes subir el fichero de la BBDD.", "error");
-        }
-        if (!/\.(csv|xlsx)$/i.test(dataFile.name)) {
-            return showMessage("El fichero debe ser .csv o .xlsx.", "error");
-        }
-
-        const payload = new FormData();
-        payload.append("name", revisionName);
-        payload.append("description", description);
-        payload.append("data_file", dataFile);
-
-        submitButton.disabled = true;
-        showMessage("Leyendo la tabla…", "");
-        try {
-            const revision = await api("/dqc/revisions", { method: "POST", body: payload });
+        if (!description || description.length < 100) {
             showMessage(
-                `Revisión creada: ${revision.data_rows} filas y ${revision.data_columns} ` +
-                `columnas. Pasando al diccionario…`, "success");
-            window.location.href = "dictionary.html?rev=" + encodeURIComponent(revision.revision_id);
-        } catch (err) {
-            showMessage(err.message, "error");
-        } finally {
-            submitButton.disabled = false;
+                "La descripción de la tabla es obligatoria y debe tener al menos 100 caracteres.",
+                "error"
+            );
+            return;
         }
+        if (!csvFile) {
+            showMessage("Debes subir un fichero CSV de la BBDD.", "error");
+            return;
+        }
+        if (!csvFile.name.toLowerCase().endsWith(".csv")) {
+            showMessage("El fichero debe ser un CSV.", "error");
+            return;
+        }
+
+        showMessage(
+            "Formulario validado. En la versión con backend se creará la revisión y pasarás al paso 2 (diccionario).",
+            "success"
+        );
     });
 
     function showMessage(text, type) {
         messageDiv.textContent = text;
         messageDiv.className = "message " + type;
-        messageDiv.style.display = text ? "block" : "none";
+        messageDiv.style.display = "block";
     }
 </script>
+<script src="assets/app.js"></script>
 </body>
 </html>

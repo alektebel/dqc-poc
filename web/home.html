@@ -214,24 +214,13 @@
             font-size: 13px;
             color: var(--text-muted);
         }
-
-        /* Añadidos al cablear: chip de filtro activo y acción destructiva. */
-        .chip-active {
-            background: var(--primary);
-            color: #ffffff;
-        }
-
-        .link-danger {
-            color: var(--text-muted);
-            margin-left: 10px;
-        }
     </style>
 </head>
 <body>
 <div class="page">
     <header class="header">
         <div class="logo">
-            <img src="assets/logo.png" alt="" onerror="this.style.display='none'" />
+            <img src="pwc-logo.png" alt="PwC logo" />
             <div>
                 <div class="logo-text-main">Data Quality Assistant</div>
                 <div class="logo-text-sub">PwC · Validador inteligente de BBDD</div>
@@ -252,19 +241,26 @@
                         Crea nuevas revisiones para analizar otras tablas.
                     </p>
                 </div>
-                <button class="btn-primary" onclick="window.location.href='index.html'">
+                <button class="btn-primary" onclick="goToNewRevision()">
                     Nueva revisión
                 </button>
             </div>
 
             <div class="filters">
-                <div class="chips" id="chips"></div>
+                <div class="chips">
+                    <span class="chip">Total: 3</span>
+                    <span class="chip chip-clickable">Pendientes</span>
+                    <span class="chip chip-clickable">En ejecución</span>
+                    <span class="chip chip-clickable">Completas</span>
+                    <span class="chip chip-clickable">Con errores</span>
+                </div>
                 <div class="search-box">
-                    <input type="text" id="search" placeholder="Buscar por nombre, tabla…" />
+                    <input type="text" placeholder="Buscar por nombre, tabla…" />
                 </div>
             </div>
 
-            <table id="table" hidden>
+            <!-- Demo: tabla estática. Luego se rellenará con datos reales desde backend -->
+            <table>
                 <thead>
                     <tr>
                         <th>Nombre de la revisión</th>
@@ -274,103 +270,52 @@
                         <th>Acciones</th>
                     </tr>
                 </thead>
-                <tbody id="rows"></tbody>
+                <tbody>
+                    <tr>
+                        <td>Control Hipotecas Ibercaja – Junio 2024</td>
+                        <td>contratos_hipotecas.csv</td>
+                        <td><span class="status-pill status-complete">Completada</span></td>
+                        <td>2026-09-12 15:30</td>
+                        <td>
+                            <a href="rules.html" class="link-secondary">Ver resultados</a>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Control Préstamos consumo – Sandbox</td>
+                        <td>prestamos_consumo.csv</td>
+                        <td><span class="status-pill status-pending">Pendiente</span></td>
+                        <td>–</td>
+                        <td>
+                            <a href="dictionary.html" class="link-secondary">Continuar (diccionario)</a>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Control Cartera Tarjetas – Demo</td>
+                        <td>cartera_tarjetas.csv</td>
+                        <td><span class="status-pill status-error">Error ejecución</span></td>
+                        <td>2026-09-10 11:12</td>
+                        <td>
+                            <a href="rules.html" class="link-secondary">Revisar reglas</a>
+                        </td>
+                    </tr>
+                </tbody>
             </table>
 
-            <div class="empty-state" id="empty">Cargando revisiones…</div>
+            <!-- Si no hubiera revisiones, se mostraría esto en lugar de la tabla -->
+            <!--
+            <div class="empty-state">
+                Aún no hay revisiones creadas. Haz clic en "Nueva revisión" para empezar.
+            </div>
+            -->
         </div>
     </main>
 </div>
 
-<script src="assets/api.js"></script>
 <script>
-    const ESTADOS = {
-        pendiente:    { label: 'Pendiente',       cls: 'status-pending'  },
-        en_ejecucion: { label: 'En ejecución',    cls: 'status-pending'  },
-        completada:   { label: 'Completada',      cls: 'status-complete' },
-        error:        { label: 'Error ejecución', cls: 'status-error'    },
-    };
-
-    let revisions = [];
-    let filter = '';
-
-    function matches(rev) {
-        const needle = document.getElementById('search').value.trim().toLowerCase();
-        if (filter && rev.status !== filter) return false;
-        if (!needle) return true;
-        return (rev.name + ' ' + (rev.data_filename || '')).toLowerCase().includes(needle);
+    function goToNewRevision() {
+        window.location.href = "index.html";
     }
-
-    function render() {
-        const counts = { pendiente: 0, en_ejecucion: 0, completada: 0, error: 0 };
-        revisions.forEach((r) => { counts[r.status] = (counts[r.status] || 0) + 1; });
-        document.getElementById('chips').innerHTML =
-            `<span class="chip">Total: ${revisions.length}</span>` +
-            Object.entries(ESTADOS).map(([key, meta]) =>
-                `<span class="chip chip-clickable${filter === key ? ' chip-active' : ''}" ` +
-                `data-status="${key}">${meta.label}: ${counts[key] || 0}</span>`).join('');
-
-        const shown = revisions.filter(matches);
-        const rows = document.getElementById('rows');
-        rows.innerHTML = shown.map((rev) => {
-            const meta = ESTADOS[rev.status] || ESTADOS.pendiente;
-            const next = rev.dictionary_filename
-                ? `rules.html?rev=${encodeURIComponent(rev.revision_id)}`
-                : `dictionary.html?rev=${encodeURIComponent(rev.revision_id)}`;
-            const label = rev.dictionary_filename
-                ? (rev.rules_total ? 'Ver resultados' : 'Definir reglas')
-                : 'Continuar (diccionario)';
-            return `<tr>
-                <td>${escapeHtml(rev.name)}</td>
-                <td>${escapeHtml(rev.data_filename || '–')}</td>
-                <td><span class="status-pill ${meta.cls}">${meta.label}</span></td>
-                <td>${formatDate(rev.updated_at || rev.created_at)}</td>
-                <td>
-                    <a href="${next}" class="link-secondary">${label}</a>
-                    <a href="#" class="link-secondary link-danger"
-                       data-delete="${escapeHtml(rev.revision_id)}">Eliminar</a>
-                </td>
-            </tr>`;
-        }).join('');
-
-        document.getElementById('table').hidden = shown.length === 0;
-        const empty = document.getElementById('empty');
-        empty.hidden = shown.length > 0;
-        empty.textContent = revisions.length
-            ? 'Ninguna revisión coincide con el filtro.'
-            : 'Aún no hay revisiones creadas. Haz clic en "Nueva revisión" para empezar.';
-    }
-
-    async function load() {
-        try {
-            revisions = await api('/dqc/revisions');
-            render();
-        } catch (err) {
-            document.getElementById('empty').textContent =
-                'No se pudieron cargar las revisiones: ' + err.message;
-        }
-    }
-
-    document.getElementById('chips').addEventListener('click', (e) => {
-        const chip = e.target.closest('[data-status]');
-        if (!chip) return;
-        filter = filter === chip.dataset.status ? '' : chip.dataset.status;
-        render();
-    });
-
-    document.getElementById('search').addEventListener('input', render);
-
-    document.getElementById('rows').addEventListener('click', async (e) => {
-        const link = e.target.closest('[data-delete]');
-        if (!link) return;
-        e.preventDefault();
-        const rev = revisions.find((r) => r.revision_id === link.dataset.delete);
-        if (!window.confirm(`Eliminar "${rev.name}" y sus ${rev.rules_total} regla(s)?`)) return;
-        await api('/dqc/revisions/' + encodeURIComponent(rev.revision_id), { method: 'DELETE' });
-        load();
-    });
-
-    load();
 </script>
+<script src="assets/app.js"></script>
 </body>
 </html>

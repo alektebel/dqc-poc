@@ -48,7 +48,7 @@ DESCRIPTION = (
 )
 
 PAGES = ["home.html", "index.html", "dictionary.html", "rules.html",
-         "assets/api.js", "assets/rules.js"]
+         "assets/app.js"]
 
 _failures: list[str] = []
 

@@ -773,53 +773,6 @@
             font-size: 11px;
             color: #334155;
         }
-
-        /* Añadidos al cablear: estados reales del control y tabla del informe. */
-        .status-validated {
-            background: #dcfce7;
-            color: #166534;
-        }
-
-        .status-rejected {
-            background: #fee2e2;
-            color: #991b1b;
-        }
-
-        .detail-actions {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
-        .detail-actions button {
-            padding: 6px 10px;
-            font-size: 11px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-
-        .btn-validate { background: var(--primary); color: #ffffff; }
-        .btn-reject   { background: #f3f4f6; color: #374151; }
-        .detail-actions button:disabled { opacity: 0.5; cursor: default; }
-
-        .report-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 8px;
-            margin-bottom: 10px;
-        }
-
-        pre.sql-box {
-            margin: 0;
-            padding: 8px;
-            background: #f9fafb;
-            border: 1px solid var(--border-gray);
-            font-size: 11px;
-            max-height: 220px;
-            overflow: auto;
-            white-space: pre-wrap;
-        }
     </style>
 </head>
 <body>
@@ -827,7 +780,7 @@
     <!-- Header -->
     <header class="header">
         <div class="logo">
-            <img src="assets/logo.png" alt="" onerror="this.style.display='none'" />
+            <img src="pwc-logo.png" alt="PwC logo" />
             <div>
                 <div class="logo-text-main">Data Quality Assistant</div>
                 <div class="logo-text-sub">PwC · Validador inteligente de BBDD</div>
@@ -837,7 +790,7 @@
             <div class="status-flow">
                 <div class="status-item">
                     <div class="status-dot done"></div>
-                    <span>Tabla cargada</span>
+                    <span>CSV cargado</span>
                 </div>
                 <div class="status-item">
                     <div class="status-dot done"></div>
@@ -858,8 +811,8 @@
                 </button>
                 <div class="header-menu" id="headerMenu">
                     <a href="home.html">Listado de revisiones</a>
-                    <a href="index.html">Nueva revisión</a>
-                    <a href="#" id="menuDictionary">Cambiar diccionario</a>
+                    <a href="index.html">Carga de CSV</a>
+                    <a href="dictionary.html">Diccionario</a>
                 </div>
             </div>
         </div>
@@ -872,9 +825,17 @@
             <div class="review-summary">
                 <div class="review-title">
                     <div class="review-info">
-                        <h1 id="revisionName">Revisión</h1>
-                        <p class="subtitle" id="revisionDescription"></p>
-                        <div class="chips" id="revisionChips"></div>
+                        <h1>Revisión: Control Hipotecas Ibercaja – Junio 2024</h1>
+                        <p class="subtitle">
+                            CSV y diccionario cargados. Define las reglas de calidad de datos y revisa los resultados
+                            antes de generar el informe final.
+                        </p>
+                        <div class="chips">
+                            <div class="chip chip-primary">Estado global: Pendiente de ejecución</div>
+                            <div class="chip">Tabla: contratos_hipotecas.csv</div>
+                            <div class="chip">Columnas: 42</div>
+                            <div class="chip">Reglas definidas: 2</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -913,7 +874,7 @@
 
                         <div id="fileEntry" class="new-rule-form" style="display:none;">
                             <label for="rulesFile">Fichero .txt con 1 regla por línea</label>
-                            <input type="file" id="rulesFile" accept=".txt,.md,.csv,.xlsx" />
+                            <input type="file" id="rulesFile" accept=".txt" />
                             <div class="small-text">
                                 Cada línea del fichero se interpretará como una regla independiente. Ideal para cargar catálogos de controles.
                             </div>
@@ -924,7 +885,30 @@
                     </div>
 
                     <!-- Lista de reglas con scroll -->
-                    <div id="rulesList" class="rules-list"></div>
+                    <div id="rulesList" class="rules-list">
+                        <div class="rule-item active">
+                            <div class="rule-left">
+                                <div class="rule-text">
+                                    La edad del cliente no puede ser mayor de 130 años.
+                                </div>
+                            </div>
+                            <div class="rule-meta">
+                                <span class="rule-status status-pending">Pendiente</span>
+                                <span class="rule-delete" data-action="delete">Eliminar</span>
+                            </div>
+                        </div>
+                        <div class="rule-item">
+                            <div class="rule-left">
+                                <div class="rule-text">
+                                    La fecha de concesión debe ser anterior a la fecha de vencimiento.
+                                </div>
+                            </div>
+                            <div class="rule-meta">
+                                <span class="rule-status status-pending">Pendiente</span>
+                                <span class="rule-delete" data-action="delete">Eliminar</span>
+                            </div>
+                        </div>
+                    </div>
                 </section>
 
                 <!-- Resumen detalle -->
@@ -933,31 +917,36 @@
                         <div>
                             <div class="detail-title">Detalle de la regla seleccionada</div>
                             <div class="detail-subtitle">
-                                Cómo se interpretó la regla, qué consulta se ejecutó y qué encontró sobre tus datos.
+                                Vista resumida de la regla. Cada nueva regla se revisa con el asistente antes de añadirse.
                             </div>
                         </div>
-                        <div class="detail-actions">
-                            <span class="badge" id="detailStatus">–</span>
-                            <button class="btn-validate" id="validateButton" disabled>Validar</button>
-                            <button class="btn-reject" id="rejectButton" disabled>Rechazar</button>
-                        </div>
+                        <span class="badge">Vista previa (mock)</span>
                     </div>
 
                     <div class="detail-block">
                         <div class="detail-label">Regla</div>
                         <div id="detailRuleText" class="detail-box">
-                            Selecciona una regla para ver su detalle.
+                            La edad del cliente no puede ser mayor de 130 años.
                         </div>
                     </div>
 
                     <div class="detail-block">
-                        <div class="detail-label">Interpretación</div>
-                        <div id="detailInterpretation" class="detail-box">–</div>
+                        <div class="detail-label">Interpretación (ejemplo)</div>
+                        <div id="detailInterpretation" class="detail-box">
+                            <strong>Campos implicados:</strong> edad_cliente<br/>
+                            <strong>Tipo de control:</strong> rango máximo
+                        </div>
                     </div>
 
                     <div class="detail-block">
                         <div class="detail-label">Condición de error</div>
-                        <div id="detailCondition" class="detail-box">–</div>
+                        <div id="detailCondition" class="detail-box">
+                            edad_cliente &gt; 130
+                            <div class="small-text" style="margin-top:6px;">
+                                <strong>Código utilizado (ejemplo):</strong><br/>
+                                <code>SELECT * FROM contratos_hipotecas WHERE edad_cliente &gt; 130;</code>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Tabs -->
@@ -971,33 +960,73 @@
 
                     <div class="tab-content">
                         <div id="tab-tabla" class="tab-content-section active">
-                            <div class="detail-label">Casos detectados</div>
-                            <div class="detail-box" id="casesBox">–</div>
+                            <div class="detail-label">Casos detectados (ejemplo)</div>
+                            <div class="detail-box">
+                                <table>
+                                    <thead>
+                                    <tr>
+                                        <th>ID contrato</th>
+                                        <th>Edad cliente</th>
+                                        <th>Fecha concesión</th>
+                                        <th>Estado</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    <tr>
+                                        <td>CT-000123</td>
+                                        <td>140</td>
+                                        <td>2020-05-12</td>
+                                        <td>Activo</td>
+                                    </tr>
+                                    <tr>
+                                        <td>CT-000456</td>
+                                        <td>999</td>
+                                        <td>2019-11-03</td>
+                                        <td>Activo</td>
+                                    </tr>
+                                    <tr>
+                                        <td>CT-000789</td>
+                                        <td>135</td>
+                                        <td>2021-01-20</td>
+                                        <td>Cancelado</td>
+                                    </tr>
+                                    </tbody>
+                                </table>
+                                <div class="detail-metrics" style="margin-top:6px;">
+                                    En la versión con backend se mostrará una muestra real de registros que incumplen la regla.
+                                </div>
+                            </div>
                         </div>
 
                         <div id="tab-resumen" class="tab-content-section">
-                            <div class="detail-label">Resultados</div>
+                            <div class="detail-label">Resultados (ejemplo)</div>
                             <div class="detail-box">
                                 <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
                                     <div>
                                         <strong>Casos detectados</strong><br/>
-                                        <span id="summaryCases">–</span>
+                                        <span id="summaryCases">52 registros</span>
                                     </div>
                                     <div>
                                         <strong>% sobre total</strong><br/>
-                                        <span id="summaryPercent">–</span>
+                                        <span id="summaryPercent">0,31 %</span>
                                     </div>
                                     <div>
                                         <strong>Severidad</strong><br/>
-                                        <span id="summarySeverity">–</span>
+                                        <span id="summarySeverity">Alta</span>
                                     </div>
                                 </div>
-                                <div class="detail-metrics" style="margin-top:6px;" id="summaryMetrics"></div>
+                                <div class="detail-metrics" style="margin-top:6px;">
+                                    Estos valores se actualizarán automáticamente tras cada ejecución.
+                                </div>
                             </div>
 
                             <div class="detail-block" style="margin-top:8px;">
-                                <div class="detail-label">Explicación</div>
-                                <div id="detailExplanation" class="detail-box">–</div>
+                                <div class="detail-label">Explicación (ejemplo)</div>
+                                <div id="detailExplanation" class="detail-box">
+                                    Se han identificado 52 contratos con edades de cliente superiores a 130 años,
+                                    lo que indica posibles errores de entrada o mapeo de datos. Se recomienda revisar
+                                    el proceso de captura de edad y aplicar validaciones de rango en origen.
+                                </div>
                             </div>
                         </div>
 
@@ -1009,7 +1038,7 @@
                                     para próximos análisis.
                                 </p>
                                 <textarea id="commentText" placeholder="Ej. Esta regla detecta valores extremos probablemente debidos a errores de carga histórica…"></textarea>
-                                <button id="addCommentButton">Guardar comentario</button>
+                                <button id="addCommentButton">Añadir comentario</button>
                                 <div id="commentsList" class="small-text" style="margin-top:10px;"></div>
                             </div>
                         </div>
@@ -1018,12 +1047,10 @@
                             <div class="detail-label">Reejecutar control</div>
                             <div class="detail-box">
                                 <p class="detail-metrics">
-                                    Explica qué falla en la interpretación actual. El asistente volverá a derivar la
-                                    consulta con esa corrección y la ejecutará de nuevo sobre los datos.
+                                    Explica por qué quieres reejecutar esta regla.
                                 </p>
                                 <textarea id="reejecutarReason" placeholder="Ej. La interpretación actual no consideraba los contratos con fecha de concesión igual a la fecha de vencimiento. Se ha ajustado la lógica y se necesita reejecutar."></textarea>
                                 <button id="reejecutarButton">Reejecutar regla</button>
-                                <div id="rerunMessage" class="small-text" style="margin-top:10px;"></div>
                             </div>
                         </div>
 
@@ -1031,10 +1058,8 @@
                             <div class="detail-label">Flujo de validación</div>
                             <div class="detail-box">
                                 <p class="detail-metrics">
-                                    Traza real de la última ejecución de esta regla: qué decidió el asistente en cada
-                                    paso y por qué.
+                                    Al seleccionar esta pestaña se abrirá una vista con el flujo completo de validación de la regla.
                                 </p>
-                                <button id="openFlujoButton">Ver flujo completo</button>
                             </div>
                         </div>
                     </div>
@@ -1069,7 +1094,7 @@
             </div>
 
             <div class="detail-box-modal">
-                <div class="detail-label-modal">Interpretación del asistente</div>
+                <div class="detail-label-modal">Interpretación del asistente (ejemplo)</div>
                 <div id="reviewInterpretation"></div>
             </div>
 
@@ -1079,15 +1104,10 @@
             </div>
 
             <div class="detail-box-modal">
-                <div class="detail-label-modal">Resultado sobre tus datos</div>
-                <div id="reviewCases"></div>
-            </div>
-
-            <div class="detail-box-modal">
                 <div class="detail-label-modal">Comentario (si la interpretación no es correcta)</div>
                 <textarea id="reviewComment" placeholder="Ej. La regla debería aplicarse solo a clientes mayores de 18 años, y el campo usado no es el correcto…"></textarea>
                 <div class="detail-metrics-modal">
-                    Al reejecutar la interpretación, este comentario se envía al asistente como corrección.
+                    Este comentario ayudará a ajustar la interpretación en futuras ejecuciones o a registrar el contexto del control.
                 </div>
             </div>
 
@@ -1107,35 +1127,393 @@
             <button class="modal-flujo-close" id="closeFlujoModal">&times;</button>
         </div>
         <div class="modal-flujo-body">
-            <div class="timeline" id="flujoTimeline"></div>
+            <div class="timeline">
+                <div class="timeline-step" data-step="1">
+                    <div class="step-icon step-ok">1</div>
+                    <div class="step-title">Input y contexto</div>
+                    <div class="step-desc">
+                        System prompt, CSV y diccionario cargados correctamente.
+                    </div>
+                </div>
+                <div class="timeline-arrow">→</div>
 
+                <div class="timeline-step" data-step="2">
+                    <div class="step-icon step-ok">2</div>
+                    <div class="step-title">Interpretación</div>
+                    <div class="step-desc">
+                        La regla se entiende como control sobre <strong>edad_cliente</strong> (rango máximo).
+                    </div>
+                </div>
+                <div class="timeline-arrow">→</div>
+
+                <div class="timeline-step" data-step="3">
+                    <div class="step-icon step-ok">3</div>
+                    <div class="step-title">Diccionario</div>
+                    <div class="step-desc">
+                        Campos implicados encontrados en diccionario: edad_cliente, id_contrato.
+                    </div>
+                </div>
+                <div class="timeline-arrow">→</div>
+
+                <div class="timeline-step" data-step="4">
+                    <div class="step-icon step-warn">4</div>
+                    <div class="step-title">Generación query</div>
+                    <div class="step-desc">
+                        2 intentos: 1 error de sintaxis por nombre de columna; 2º intento correcto.
+                    </div>
+                </div>
+                <div class="timeline-arrow">→</div>
+
+                <div class="timeline-step" data-step="5">
+                    <div class="step-icon step-ok">5</div>
+                    <div class="step-title">Ejecución BBDD</div>
+                    <div class="step-desc">
+                        Query ejecutada sobre <strong>contratos_hipotecas</strong> sin errores técnicos.
+                    </div>
+                </div>
+                <div class="timeline-arrow">→</div>
+
+                <div class="timeline-step" data-step="6">
+                    <div class="step-icon step-ok">6</div>
+                    <div class="step-title">Casos</div>
+                    <div class="step-desc">
+                        52 registros (0,31%) con edad_cliente &gt; 130.
+                    </div>
+                </div>
+                <div class="timeline-arrow">→</div>
+
+                <div class="timeline-step" data-step="7">
+                    <div class="step-icon step-ok">7</div>
+                    <div class="step-title">Conclusiones</div>
+                    <div class="step-desc">
+                        Casos con edades extremas coherentes con errores de captura o mapeo. Revisar proceso de alta de clientes y validaciones en origen.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bloque de detalle del paso seleccionado -->
             <div class="flujo-detail">
                 <div class="flujo-detail-title">Detalle del paso seleccionado</div>
                 <div id="flujoDetailBox" class="flujo-detail-box">
-                    Pulsa en uno de los pasos del flujo para ver su detalle.
+                    Pulsa en uno de los números del flujo para ver el desglose del problema o detalle técnico de ese paso.
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- MODAL informe -->
-<div id="reportModal" class="modal-overlay">
-    <div class="modal">
-        <div class="modal-header">
-            <div>
-                <div class="modal-title">Informe de la revisión</div>
-                <div class="modal-subtitle">
-                    Controles validados y consulta centralizada que los une en un único resultado.
-                </div>
-            </div>
-            <button class="modal-close" id="closeReportModal">&times;</button>
-        </div>
-        <div class="modal-body" id="reportBody"></div>
-    </div>
-</div>
+<script>
+    // Menú de tres puntos
+    const headerMenuButton = document.getElementById("headerMenuButton");
+    const headerMenu = document.getElementById("headerMenu");
 
-<script src="assets/api.js"></script>
-<script src="assets/rules.js"></script>
+    headerMenuButton.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isOpen = headerMenu.style.display === "block";
+        headerMenu.style.display = isOpen ? "none" : "block";
+    });
+
+    document.addEventListener("click", (e) => {
+        if (!headerMenu.contains(e.target) && !headerMenuButton.contains(e.target)) {
+            headerMenu.style.display = "none";
+        }
+    });
+
+    const rulesListEl = document.getElementById("rulesList");
+    const detailRuleTextEl = document.getElementById("detailRuleText");
+    const generateReportButton = document.getElementById("generateReportButton");
+
+    const entryModeRadios = document.querySelectorAll('input[name="entryMode"]');
+    const manualEntryEl = document.getElementById("manualEntry");
+    const fileEntryEl = document.getElementById("fileEntry");
+    const rulesFileInput = document.getElementById("rulesFile");
+    const uploadRulesFileButton = document.getElementById("uploadRulesFileButton");
+    const leftMessageEl = document.getElementById("leftMessage");
+    const newRuleTextarea = document.getElementById("newRule");
+    const addRuleButton = document.getElementById("addRuleButton");
+
+    const tabs = document.querySelectorAll(".tab");
+    const tabSections = document.querySelectorAll(".tab-content-section");
+    const addCommentButton = document.getElementById("addCommentButton");
+    const commentTextEl = document.getElementById("commentText");
+    const commentsListEl = document.getElementById("commentsList");
+    const reejecutarButton = document.getElementById("reejecutarButton");
+    const reejecutarReasonEl = document.getElementById("reejecutarReason");
+
+    const ruleReviewModal = document.getElementById("ruleReviewModal");
+    const closeReviewModal = document.getElementById("closeReviewModal");
+    const reviewRuleTextEl = document.getElementById("reviewRuleText");
+    const reviewInterpretationEl = document.getElementById("reviewInterpretation");
+    const reviewCodeEl = document.getElementById("reviewCode");
+    const reviewCommentEl = document.getElementById("reviewComment");
+    const reejecutarReviewButton = document.getElementById("reejecutarReviewButton");
+    const confirmReviewButton = document.getElementById("confirmReviewButton");
+
+    const flujoModal = document.getElementById("flujoModal");
+    const closeFlujoModalBtn = document.getElementById("closeFlujoModal");
+    const timelineSteps = document.querySelectorAll(".timeline-step");
+    const flujoDetailBox = document.getElementById("flujoDetailBox");
+
+    const stepDetails = {
+        1: "Se han cargado el CSV y el diccionario, junto con el system prompt. Aquí es donde suelen aparecer problemas de formato (delimitadores, encoding) o ausencia de diccionario. En caso de error se registraría el fichero afectado y el tipo de incompatibilidad detectada.",
+        2: "En la interpretación se mapea la regla en lenguaje natural a campos concretos y tipo de control. Los problemas típicos son ambigüedad (reglas poco claras) o mapeo a campos incorrectos. Se mostraría qué campos se han elegido, qué alternativas se barajaron y el motivo de la selección.",
+        3: "Se validan los campos de la regla contra el diccionario. Si falta algún campo, si el tipo de dato no encaja, o si hay conflictos de nomenclatura, aquí se documenta el detalle. También se indican posibles campos candidatos que podrían sustituir al que falta.",
+        4: "La generación de la query es donde suelen aparecer errores de sintaxis y de lógica. En este paso se podría mostrar cada intento de query, el mensaje de error de la BBDD y la corrección aplicada (p.ej., cambio de nombre de columna, ajuste de comparadores, filtros añadidos…).",
+        5: "Durante la ejecución en BBDD se registran problemas de rendimiento, timeouts, bloqueos o errores de permisos. Aquí se listarían el tiempo de ejecución, número de registros leídos, errores devueltos por el motor de BBDD y posibles recomendaciones de optimización.",
+        6: "En Casos se resume la población afectada por la regla: número de registros, % sobre el total, segmentos más afectados, etc. El desglose podría incluir ejemplos concretos de contratos, rangos de valores detectados y cualquier patrón relevante.",
+        7: "Las conclusiones sintetizan el impacto del problema de datos y proponen acciones. Aquí se puede mostrar el razonamiento del asistente, los riesgos identificados, el nivel de severidad y las recomendaciones para negocio y para sistemas."
+    };
+
+    entryModeRadios.forEach(radio => {
+        radio.addEventListener("change", () => {
+            if (radio.value === "manual") {
+                manualEntryEl.style.display = "block";
+                fileEntryEl.style.display = "none";
+            } else {
+                manualEntryEl.style.display = "none";
+                fileEntryEl.style.display = "block";
+            }
+            leftMessageEl.textContent = "";
+            leftMessageEl.className = "left-message";
+        });
+    });
+
+    rulesListEl.addEventListener("click", function (event) {
+        if (event.target.matches(".rule-delete")) return;
+
+        const item = event.target.closest(".rule-item");
+        if (!item) return;
+
+        document.querySelectorAll(".rule-item").forEach(el => el.classList.remove("active"));
+        item.classList.add("active");
+
+        const ruleText = item.querySelector(".rule-text").textContent.trim();
+        detailRuleTextEl.textContent = ruleText;
+
+        leftMessageEl.textContent = "";
+        leftMessageEl.className = "left-message";
+    });
+
+    rulesListEl.addEventListener("click", function (event) {
+        if (!event.target.matches(".rule-delete")) return;
+
+        const item = event.target.closest(".rule-item");
+        if (!item) return;
+
+        const isActive = item.classList.contains("active");
+        const ruleText = item.querySelector(".rule-text").textContent.trim();
+
+        item.remove();
+
+        leftMessageEl.textContent = `Regla eliminada: "${ruleText}".`;
+        leftMessageEl.className = "left-message";
+
+        if (isActive) {
+            const firstRule = rulesListEl.querySelector(".rule-item");
+            if (firstRule) {
+                firstRule.classList.add("active");
+                detailRuleTextEl.textContent = firstRule
+                    .querySelector(".rule-text")
+                    .textContent.trim();
+            } else {
+                detailRuleTextEl.textContent = "Selecciona una regla para ver su detalle.";
+            }
+        }
+    });
+
+    // Revisión LLM al añadir regla manual
+    addRuleButton.addEventListener("click", () => {
+        const text = newRuleTextarea.value.trim();
+        leftMessageEl.textContent = "";
+        leftMessageEl.className = "left-message";
+
+        if (!text) {
+            leftMessageEl.textContent = "Escribe una regla antes de iniciar la revisión.";
+            leftMessageEl.classList.add("error");
+            return;
+        }
+
+        reviewRuleTextEl.textContent = escapeHtml(text);
+
+        if (/edad/i.test(text)) {
+            reviewInterpretationEl.innerHTML =
+                "<strong>Campos implicados:</strong> edad_cliente<br/><strong>Tipo de control:</strong> rango máximo";
+            reviewCodeEl.innerHTML =
+                "edad_cliente &gt; 130<br/><div class='detail-metrics-modal'><strong>SQL ejemplo:</strong><br/><code>SELECT * FROM contratos_hipotecas WHERE edad_cliente &gt; 130;</code></div>";
+        } else if (/concesi[oó]n.*vencimiento/i.test(text)) {
+            reviewInterpretationEl.innerHTML =
+                "<strong>Campos implicados:</strong> fecha_concesion, fecha_vencimiento<br/><strong>Tipo de control:</strong> consistencia temporal";
+            reviewCodeEl.innerHTML =
+                "fecha_concesion &gt;= fecha_vencimiento<br/><div class='detail-metrics-modal'><strong>SQL ejemplo:</strong><br/><code>SELECT * FROM contratos_hipotecas WHERE fecha_concesion &gt;= fecha_vencimiento;</code></div>";
+        } else {
+            reviewInterpretationEl.innerHTML =
+                "<strong>Campos implicados:</strong> por determinar<br/><strong>Tipo de control:</strong> validación semántica";
+            reviewCodeEl.innerHTML =
+                "Condición de error pendiente de interpretación<br/><div class='detail-metrics-modal'><strong>SQL ejemplo:</strong><br/><code>-- La consulta SQL se generará a partir de la regla en lenguaje natural</code></div>";
+        }
+
+        reviewCommentEl.value = "";
+        ruleReviewModal.style.display = "flex";
+    });
+
+    closeReviewModal.addEventListener("click", () => {
+        ruleReviewModal.style.display = "none";
+    });
+
+    reejecutarReviewButton.addEventListener("click", () => {
+        const comment = reviewCommentEl.value.trim();
+        alert(
+            "Demo: aquí se volvería a pedir al asistente que interprete la regla, " +
+            "utilizando tu comentario como contexto adicional.\n\n" +
+            (comment ? "Comentario enviado:\n" + comment : "No has añadido comentario adicional.")
+        );
+    });
+
+    confirmReviewButton.addEventListener("click", () => {
+        const text = reviewRuleTextEl.textContent.trim();
+        const comment = reviewCommentEl.value.trim();
+
+        const newItem = document.createElement("div");
+        newItem.className = "rule-item";
+        newItem.innerHTML = `
+            <div class="rule-left">
+                <div class="rule-text">${escapeHtml(text)}</div>
+            </div>
+            <div class="rule-meta">
+                <span class="rule-status status-pending">Pendiente</span>
+                <span class="rule-delete" data-action="delete">Eliminar</span>
+            </div>
+        `;
+        rulesListEl.appendChild(newItem);
+
+        ruleReviewModal.style.display = "none";
+        newRuleTextarea.value = "";
+
+        leftMessageEl.textContent = comment
+            ? "Regla añadida con comentario de ajuste (demo)."
+            : "Regla añadida tras revisión del asistente (demo).";
+        leftMessageEl.className = "left-message";
+    });
+
+    uploadRulesFileButton.addEventListener("click", () => {
+        leftMessageEl.textContent = "";
+        leftMessageEl.className = "left-message";
+
+        const file = rulesFileInput.files[0];
+        if (!file) {
+            leftMessageEl.textContent = "Selecciona un fichero .txt antes de cargar.";
+            leftMessageEl.classList.add("error");
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = e => {
+            const content = e.target.result;
+            const lines = content.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+            if (lines.length === 0) {
+                leftMessageEl.textContent = "El fichero no contiene reglas (líneas vacías).";
+                leftMessageEl.classList.add("error");
+                return;
+            }
+
+            lines.forEach(line => {
+                const newItem = document.createElement("div");
+                newItem.className = "rule-item";
+                newItem.innerHTML = `
+                    <div class="rule-left">
+                        <div class="rule-text">${escapeHtml(line)}</div>
+                    </div>
+                    <div class="rule-meta">
+                        <span class="rule-status status-pending">Pendiente</span>
+                        <span class="rule-delete" data-action="delete">Eliminar</span>
+                    </div>
+                `;
+                rulesListEl.appendChild(newItem);
+            });
+
+            leftMessageEl.textContent = `Se han añadido ${lines.length} reglas desde el fichero (demo local).`;
+            leftMessageEl.className = "left-message";
+        };
+        reader.readAsText(file);
+    });
+
+    // Tabs: conducta especial para "flujo" (abre modal)
+    tabs.forEach(tab => {
+        tab.addEventListener("click", () => {
+            const target = tab.getAttribute("data-tab");
+
+            if (target === "flujo") {
+                flujoModal.style.display = "flex";
+                return;
+            }
+
+            tabs.forEach(t => t.classList.remove("active"));
+            tab.classList.add("active");
+            tabSections.forEach(sec => sec.classList.remove("active"));
+            document.getElementById("tab-" + target).classList.add("active");
+        });
+    });
+
+    closeFlujoModalBtn.addEventListener("click", () => {
+        flujoModal.style.display = "none";
+    });
+
+    // Al clicar en un número del flujo, mostramos desglose del problema
+    timelineSteps.forEach(step => {
+        step.addEventListener("click", () => {
+            const num = step.getAttribute("data-step");
+
+            timelineSteps.forEach(s => s.classList.remove("active"));
+            step.classList.add("active");
+
+            const text = stepDetails[num] || "Información detallada no disponible para este paso (demo).";
+            flujoDetailBox.textContent = text;
+        });
+    });
+
+    addCommentButton.addEventListener("click", () => {
+        const text = commentTextEl.value.trim();
+        if (!text) return;
+
+        const p = document.createElement("p");
+        p.textContent = "• " + text;
+        p.style.margin = "0 0 8px";
+        p.style.color = "#334155";
+
+        commentsListEl.appendChild(p);
+        commentTextEl.value = "";
+    });
+
+    reejecutarButton.addEventListener("click", () => {
+        const reason = reejecutarReasonEl.value.trim();
+        if (!reason) {
+            alert("Por favor, indica el motivo de la reejecución.");
+            return;
+        }
+        alert(
+            "Demo: aquí se reejecutaría la regla sobre la BBDD.\n\n" +
+            "Motivo de reejecución enviado:\n\n" +
+            reason +
+            "\n\nEn la versión con backend, esta información se usará para mejorar la interpretación del asistente o registrar el contexto de la reejecución."
+        );
+    });
+
+    generateReportButton.addEventListener("click", () => {
+        alert(
+            "Demo: aquí se generará y descargará el informe de calidad de datos " +
+            "con todas las reglas, resultados y explicaciones.\n\n" +
+            "En la versión con backend, esta acción llamará a la API para construir y entregar el informe real."
+        );
+    });
+
+    function escapeHtml(str) {
+        return str
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+    }
+</script>
+<script src="assets/app.js"></script>
 </body>
 </html>

@@ -248,7 +248,7 @@
     <!-- Encabezado -->
     <header class="header">
         <div class="logo">
-            <img src="assets/logo.png" alt="" onerror="this.style.display='none'" />
+            <img src="pwc-logo.png" alt="PwC logo" />
             <div>
                 <div class="logo-text-main">Data Quality Assistant</div>
                 <div class="logo-text-sub">PwC · Validador inteligente de BBDD</div>
@@ -265,7 +265,7 @@
             <!-- Formulario -->
             <section class="form-section">
                 <h1>Subir diccionario de datos</h1>
-                <p class="subtitle" id="subtitle">
+                <p class="subtitle">
                     Explica las columnas de la tabla que has subido en el paso anterior.
                     El asistente utilizará este diccionario para entender el significado de cada campo.
                 </p>
@@ -285,7 +285,7 @@
                             />
                         </div>
 
-                        <button type="submit" id="submitButton">Guardar diccionario</button>
+                        <button type="submit">Guardar diccionario</button>
 
                         <div id="message" class="message" style="display:none;"></div>
                     </form>
@@ -305,71 +305,50 @@
                 </div>
 
                 <ul class="aside-list">
-                    <li>Incluye el nombre exacto de la columna tal y como aparece en la tabla.</li>
+                    <li>Incluye el nombre exacto de la columna tal y como aparece en el CSV.</li>
                     <li>Marca si el campo es clave primaria o identificador de contrato/cliente.</li>
                     <li>Incluye unidades (euros, días, porcentaje…) cuando aplique.</li>
                     <li>Si conoces rangos esperados (edad, importes máximos, etc.), añádelos.</li>
                 </ul>
 
-                <a href="home.html" class="link-secondary">
-                    &larr; Volver al listado de revisiones
+                <a href="index.html" class="link-secondary">
+                    &larr; Volver al paso 1 (subida de BBDD)
                 </a>
             </aside>
         </div>
     </main>
 </div>
 
-<script src="assets/api.js"></script>
 <script>
-    const revisionId = requireRevision();
     const form = document.getElementById("dictionaryForm");
     const messageDiv = document.getElementById("message");
-    const submitButton = document.getElementById("submitButton");
 
-    (async function showRevision() {
-        try {
-            const rev = await api("/dqc/revisions/" + encodeURIComponent(revisionId));
-            document.getElementById("subtitle").textContent =
-                `Revisión "${rev.name}" · ${rev.data_filename} (${rev.data_rows} filas, ` +
-                `${rev.data_columns} columnas). Sube el diccionario que explica esas columnas.`;
-        } catch (err) {
-            showMessage(err.message, "error");
-        }
-    })();
-
-    form.addEventListener("submit", async function (event) {
+    form.addEventListener("submit", function (event) {
         event.preventDefault();
-        showMessage("", "");
+        messageDiv.style.display = "block";
+        messageDiv.textContent = "";
+        messageDiv.className = "message";
 
         const dictionaryFile = document.getElementById("dictionaryFile").files[0];
+
         if (!dictionaryFile) {
-            return showMessage("Debes subir un fichero de diccionario.", "error");
+            showMessage("Debes subir un fichero de diccionario.", "error");
+            return;
         }
 
-        const payload = new FormData();
-        payload.append("dictionary", dictionaryFile);
-
-        submitButton.disabled = true;
-        showMessage("Leyendo el diccionario…", "");
-        try {
-            const rev = await api(
-                "/dqc/revisions/" + encodeURIComponent(revisionId) + "/dictionary",
-                { method: "POST", body: payload });
-            showMessage(`Diccionario guardado: ${rev.dictionary_fields} campos reconocidos.`,
-                        "success");
-            window.location.href = "rules.html?rev=" + encodeURIComponent(revisionId);
-        } catch (err) {
-            showMessage(err.message, "error");
-        } finally {
-            submitButton.disabled = false;
-        }
+        // Aquí, más adelante, llamaremos al backend para guardar el diccionario
+        showMessage(
+            "Diccionario validado y listo para guardar. El siguiente paso será definir y ejecutar las reglas de control.",
+            "success"
+        );
     });
 
     function showMessage(text, type) {
         messageDiv.textContent = text;
         messageDiv.className = "message " + type;
-        messageDiv.style.display = text ? "block" : "none";
+        messageDiv.style.display = "block";
     }
 </script>
+<script src="assets/app.js"></script>
 </body>
 </html>

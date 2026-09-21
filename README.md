@@ -16,6 +16,25 @@ así que se arranca un proceso y se abre un puerto.
 | Paso 2 | `web/dictionary.html` | el diccionario que explica esas columnas (.csv/.xlsx) |
 | Paso 3 | `web/rules.html` | reglas en lenguaje natural, su interpretación, los casos detectados y el informe |
 
+**Las cuatro páginas son las maquetas tal y como se entregaron**, byte a byte,
+con una sola línea añadida antes de `</body>`:
+
+```html
+<script src="assets/app.js"></script>
+```
+
+Todo lo demás —llamadas a la API, el contenido real que sustituye a las filas
+de ejemplo, los dos controles que el diseño no traía (validar/rechazar) y el
+modal del informe— vive en `web/assets/app.js`. Cada maqueta trae su propio
+script de demostración, que se ejecuta antes; `app.js` lo desactiva
+reemplazando los nodos por clones sin listeners, en vez de editar el diseño.
+
+Consecuencia de no tocar el HTML: **los textos de la maqueta se mantienen
+aunque los datos sean reales** — "Interpretación (ejemplo)", "Resultados
+(ejemplo)", "CSV cargado" en la cabecera. Se cambian editando la maqueta,
+cuando quieras. Y `pwc-logo.png`, que la maqueta referencia y este repo no
+incluye: deja el tuyo en `web/` y aparece; mientras tanto `app.js` lo oculta.
+
 Una **revisión** agrupa la tabla, su diccionario y los controles generados
 sobre ella. Cada control queda ligado a su revisión, de modo que el informe
 de una revisión nunca mezcla controles de otra.
@@ -149,7 +168,7 @@ api/
   routers/dqc.py         generador por lotes, checks CRUD
   routers/revisions.py   revisiones, jobs y el flujo de las pantallas
   routers/tabular.py     lector único .csv/.xlsx
-web/            las cuatro pantallas + assets/api.js, assets/rules.js
+web/            las cuatro maquetas, intactas + assets/app.js (todo el cableado)
 src/knowledge/  cliente LLM multi-backend, BCBS 239, atribución
 training/dq/    persistencia SQLite (controles, revisiones y jobs)
 DQC/eval/       harness de evaluación del agente (mutation testing)
