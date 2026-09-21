@@ -170,7 +170,37 @@ Variables: `REGLLM_CHECKS_DB`, `REGLLM_REVISIONS_DIR`, `REGLLM_JOB_WORKERS`.
 
 ```bash
 pytest -q
+python -m pyflakes api/ src/ training/ scripts/ tests/    # el CI lo exige en cero
 ```
+
+## Automatización
+
+`.github/workflows/ci.yml` se ejecuta en cada push y pull request:
+
+1. **Tests y lint** — instala, pasa `pyflakes` y la suite completa.
+2. **Imagen** — construye el `Dockerfile`, **arranca el contenedor en el
+   propio runner** y lo verifica con `scripts/smoke.py`. Solo si eso pasa,
+   publica en GHCR.
+
+La verificación no es un health check: crea una revisión desde un CSV,
+sube el diccionario, lee las reglas, genera el informe y borra lo que ha
+creado, además de pedir las cuatro pantallas y sus assets. Una imagen que
+arranca pero se dejó `web/` fuera responde `/health` y falla aquí.
+
+Sirve igual contra cualquier despliegue, no solo en CI:
+
+```bash
+python scripts/smoke.py --base-url http://localhost:8000
+```
+
+Sale con código 0 o 1, así que encadena bien en cualquier script.
+
+**Dónde acaba la imagen**: `ghcr.io/<owner>/dqc-poc`, etiquetada por commit
+(`sha-abc1234`), por rama y por versión (`v1.2.3` desde una etiqueta git).
+Se publica **solo desde `main` y desde etiquetas `v*`**: una rama de
+trabajo se construye y se verifica, pero no deja imagen en el registro.
+Nada se despliega en ningún sitio: el workflow produce un artefacto, no
+un entorno.
 
 ## Harness de evaluación
 

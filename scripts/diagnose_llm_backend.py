@@ -26,6 +26,10 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:                      # imported lazily below at runtime
+    from src.knowledge.llm_client import LocalLLMClient
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -45,13 +49,13 @@ def main() -> None:
         import llama_cpp  # noqa: F401
         print(f"[1] llama-cpp-python importable : YES ({llama_cpp.__file__})")
     except ImportError as e:
-        print(f"[1] llama-cpp-python importable : NO  <-- problem")
+        print("[1] llama-cpp-python importable : NO  <-- problem")
         print(f"      ImportError: {e}")
-        print(f"      Fix: pip install llama-cpp-python   (using THIS interpreter:")
+        print("      Fix: pip install llama-cpp-python   (using THIS interpreter:")
         print(f"           {sys.executable} -m pip install llama-cpp-python)")
     print()
 
-    from src.knowledge.llm_client import LocalLLMClient, _Llama, _LLM_CFG, _yaml
+    from src.knowledge.llm_client import LocalLLMClient, _LLM_CFG, _yaml
 
     # 2. Was config.yaml found and parsed at all?
     cfg_path_root = ROOT / "config.yaml"
@@ -75,7 +79,7 @@ def main() -> None:
     print(f"      gguf_n_gpu_layers         = {client.gguf_n_gpu_layers!r}")
     if client.prefer not in ("auto", "gguf"):
         print(f"      <-- problem: prefer is {client.prefer!r}, not 'auto' or 'gguf', so")
-        print(f"          the GGUF backend is never even attempted. Check REGLLM_LLM.")
+        print("          the GGUF backend is never even attempted. Check REGLLM_LLM.")
     print()
 
     # 5. Does the path actually resolve to a file, from here?

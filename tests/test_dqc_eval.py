@@ -9,7 +9,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
 
 EVAL_DIR = Path(__file__).resolve().parent.parent / "DQC" / "eval"
 sys.path.insert(0, str(EVAL_DIR))

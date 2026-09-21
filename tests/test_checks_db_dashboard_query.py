@@ -35,7 +35,7 @@ def test_builds_valid_union_all_sql(conn):
         status="validated",
     )
     conn.execute(f'CREATE TABLE t ("{checks_db.PK_COLUMN}" TEXT, x INTEGER)')
-    conn.execute(f'INSERT INTO t VALUES (\'CIC_1\', 3)')
+    conn.execute("INSERT INTO t VALUES ('CIC_1', 3)")
     conn.commit()
 
     sql = checks_db.build_dashboard_query(conn)

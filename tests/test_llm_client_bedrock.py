@@ -11,7 +11,6 @@ code paths (``detect_backend``, ``chat``, ``chat_json``, ``chat_json_stream``,
 
 from __future__ import annotations
 
-import pytest
 
 from src.knowledge import llm_client as llm_client_module
 from src.knowledge.llm_client import ChatResponse, LocalLLMClient

@@ -3,7 +3,6 @@ lexical default plus optional semantic (embedding) blending."""
 
 from __future__ import annotations
 
-import math
 
 from api.routers.dqc_dictionary import (
     FieldEntry, select_relevant_fields, _cosine, _minmax,

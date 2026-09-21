@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from src.knowledge.attribution import (
-    ContextUnit, attribute_by_ablation, attribute_sql_structurally,
+    attribute_by_ablation, attribute_sql_structurally,
     sql_identifiers, sql_similarity, units_from_fields, units_from_reg_chunks,
 )
 

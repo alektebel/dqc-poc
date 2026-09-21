@@ -1,0 +1,128 @@
+# CI: tests, imagen y verificación de que la imagen sirve la aplicación.
+#
+# No despliega en ningún sitio. Construye el artefacto, lo arranca en el
+# propio runner, comprueba que funciona de verdad (pantallas + flujo de la
+# API, no solo /health) y solo entonces lo publica en GHCR.
+#
+# Publica únicamente desde `main` y desde etiquetas `v*`: una rama de
+# trabajo se construye y se verifica, pero no deja imagen.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Un push nuevo sobre la misma rama cancela el anterior: nadie espera el
+# resultado de un commit ya sustituido.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  test:
+    name: Tests y lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Lint (imports muertos, nombres sin definir)
+        run: python -m pyflakes api/ src/ training/ scripts/ tests/
+
+      - name: Tests
+        env:
+          REGLLM_LLM: stub
+        run: pytest -q
+
+  image:
+    name: "Imagen: construir, arrancar y verificar"
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Calcular etiquetas
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=short
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # `load: true` deja la imagen en el demonio del runner para poder
+      # arrancarla. Se publica después, y solo si la verificación pasa:
+      # una imagen rota no debe llegar nunca al registro.
+      - name: Construir
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Arrancar el contenedor
+        run: |
+          docker run -d --name dqc -p 8000:8000 \
+            -e REGLLM_LLM=stub \
+            ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+
+      # El paso que da sentido a todo lo anterior: sin modelo (stub) pero
+      # con el flujo real — crear una revisión desde un CSV, subir el
+      # diccionario, leer las reglas y borrar. Una imagen que arranca pero
+      # se dejó `web/` fuera pasa un health check y falla aquí.
+      - name: Verificar el despliegue
+        run: python scripts/smoke.py --base-url http://localhost:8000 --timeout 90
+
+      - name: Logs del contenedor si algo falló
+        if: failure()
+        run: docker logs dqc
+
+      - name: Entrar en GHCR
+        if: >-
+          github.event_name == 'push' &&
+          (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publicar la imagen verificada
+        if: >-
+          github.event_name == 'push' &&
+          (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        run: |
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "→ $tag"
+            docker push "$tag"
+          done <<< "${{ steps.meta.outputs.tags }}"
+
+      - name: Parar el contenedor
+        if: always()
+        run: docker rm -f dqc || true

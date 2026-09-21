@@ -27,7 +27,6 @@ batch only the dictionary fields relevant to it.
 from __future__ import annotations
 
 import io
-import json
 import logging
 import re
 import unicodedata
@@ -375,7 +374,7 @@ def _lexical_score(entry: FieldEntry, words: set[str]) -> float:
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    dot = num = den_a = den_b = 0.0
+    dot = den_a = den_b = 0.0
     for x, y in zip(a, b):
         dot += x * y
         den_a += x * x

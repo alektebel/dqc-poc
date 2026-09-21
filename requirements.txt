@@ -1,4 +1,4 @@
-# Local development: everything the app runs on, plus the test runner.
+# Local development: everything the app runs on, plus the test tooling.
 #
 #   pip install -r requirements.txt
 #   uvicorn api.main:app --port 8000 --reload   → http://localhost:8000
@@ -6,3 +6,4 @@
 -r requirements-dqc.txt
 
 pytest>=8.0
+pyflakes>=3.2      # imports muertos y nombres sin definir; el CI los exige en cero
