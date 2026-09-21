@@ -3,11 +3,13 @@
 // The frontend is one browser script, so the
 // whole configuration is: which globals exist, and which mistakes matter.
 export default [
+  // third-party, minified, not ours to lint or reformat
+  { ignores: ['web/assets/vendor/**'] },
   {
     files: ['web/assets/**/*.js'],
     languageOptions: {
       ecmaVersion: 2022,
-      sourceType: 'script',      // loaded with a plain <script src>, not a module
+      sourceType: 'module',      // <script type="module">, with imports
       globals: {
         window: 'readonly',
         document: 'readonly',
@@ -18,7 +20,11 @@ export default [
         URL: 'readonly',
         Blob: 'readonly',
         setTimeout: 'readonly',
+        clearTimeout: 'readonly',
         Promise: 'readonly',
+        AbortController: 'readonly',
+        TextDecoder: 'readonly',
+        indexedDB: 'readonly',
       },
     },
     rules: {
