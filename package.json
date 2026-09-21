@@ -1,0 +1,21 @@
+{
+  "name": "dqc-poc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Data Quality Assistant — frontend tooling. The app itself needs none of this: web/ is plain HTML, CSS and one JS file that FastAPI serves as-is. These are development tools only; nothing here participates in the build or the deployment.",
+  "scripts": {
+    "start": "uvicorn api.main:app --port 8000 --reload",
+    "lint": "eslint web/assets",
+    "lint:fix": "eslint web/assets --fix",
+    "format": "prettier --write web/assets",
+    "format:check": "prettier --check web/assets",
+    "smoke": "python scripts/smoke.py"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

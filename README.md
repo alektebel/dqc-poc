@@ -192,6 +192,23 @@ pytest -q
 python -m pyflakes api/ src/ training/ scripts/ tests/    # el CI lo exige en cero
 ```
 
+## Herramientas de frontend
+
+`package.json` existe **solo para herramientas de desarrollo**. No
+participa en el build ni en el despliegue: `web/` es HTML, CSS y un fichero
+JS que FastAPI sirve tal cual, y la imagen no instala nada de npm.
+
+```bash
+npm install          # eslint + prettier, nada más
+npm run lint         # errores reales en web/assets
+npm run format       # formato consistente (prettier)
+npm run format:check # lo mismo, sin escribir
+npm start            # atajo de uvicorn api.main:app --port 8000 --reload
+npm run smoke        # atajo de scripts/smoke.py
+```
+
+Nadie necesita Node para ejecutar ni desplegar la aplicación.
+
 ## Automatización
 
 `.github/workflows/ci.yml` se ejecuta en cada push y pull request:

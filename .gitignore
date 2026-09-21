@@ -44,6 +44,7 @@ tmp/
 
 # Frontend
 frontend/.next/
+node_modules/
 frontend/node_modules/
 
 # DQC Angular app

@@ -26,7 +26,11 @@ async function api(path, opts = {}) {
   const res = await fetch(API + path, opts);
   const text = await res.text();
   let body = null;
-  try { body = text ? JSON.parse(text) : null; } catch (_) { body = text; }
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch (_) {
+    body = text;
+  }
   if (!res.ok) {
     const detail = (body && body.detail) || body || res.statusText;
     throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
@@ -60,7 +64,9 @@ function requireRevision() {
 
 function escapeHtml(value) {
   return String(value === null || value === undefined ? '' : value)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
 
@@ -69,8 +75,10 @@ function formatDate(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return iso;
   const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-         `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
 }
 
 /** Replace a node with a listener-free clone and return the new node.
@@ -102,7 +110,9 @@ function injectStyles(css) {
     image rather than showing a torn-page icon in the header. */
 function hideMissingLogo() {
   document.querySelectorAll('.logo img').forEach((img) => {
-    const hide = () => { img.style.visibility = 'hidden'; };
+    const hide = () => {
+      img.style.visibility = 'hidden';
+    };
     img.addEventListener('error', hide);
     if (img.complete && img.naturalWidth === 0) hide();
   });
@@ -111,10 +121,10 @@ function hideMissingLogo() {
 // ── listing ──────────────────────────────────────────────────────────────────
 
 const ESTADO_REVISION = {
-  pendiente:    { label: 'Pendiente',       cls: 'status-pending'  },
-  en_ejecucion: { label: 'En ejecución',    cls: 'status-pending'  },
-  completada:   { label: 'Completada',      cls: 'status-complete' },
-  error:        { label: 'Error ejecución', cls: 'status-error'    },
+  pendiente: { label: 'Pendiente', cls: 'status-pending' },
+  en_ejecucion: { label: 'En ejecución', cls: 'status-pending' },
+  completada: { label: 'Completada', cls: 'status-complete' },
+  error: { label: 'Error ejecución', cls: 'status-error' },
 };
 
 function initHome() {
@@ -139,29 +149,40 @@ function initHome() {
 
   function render() {
     const counts = {};
-    revisions.forEach((r) => { counts[r.status] = (counts[r.status] || 0) + 1; });
+    revisions.forEach((r) => {
+      counts[r.status] = (counts[r.status] || 0) + 1;
+    });
     chips.innerHTML =
       `<span class="chip">Total: ${revisions.length}</span>` +
-      Object.entries(ESTADO_REVISION).map(([key, meta]) =>
-        `<span class="chip chip-clickable${filter === key ? ' chip-active' : ''}"
-               data-status="${key}">${meta.label}: ${counts[key] || 0}</span>`).join('');
+      Object.entries(ESTADO_REVISION)
+        .map(
+          ([key, meta]) =>
+            `<span class="chip chip-clickable${filter === key ? ' chip-active' : ''}"
+               data-status="${key}">${meta.label}: ${counts[key] || 0}</span>`,
+        )
+        .join('');
 
     const needle = search.value.trim().toLowerCase();
     const shown = revisions.filter((rev) => {
       if (filter && rev.status !== filter) return false;
       if (!needle) return true;
-      return (rev.name + ' ' + (rev.data_filename || '')).toLowerCase().includes(needle);
+      return (rev.name + ' ' + (rev.data_filename || ''))
+        .toLowerCase()
+        .includes(needle);
     });
 
-    tbody.innerHTML = shown.map((rev) => {
-      const meta = ESTADO_REVISION[rev.status] || ESTADO_REVISION.pendiente;
-      const next = rev.dictionary_filename
-        ? `rules.html?rev=${encodeURIComponent(rev.revision_id)}`
-        : `dictionary.html?rev=${encodeURIComponent(rev.revision_id)}`;
-      const label = rev.dictionary_filename
-        ? (rev.rules_total ? 'Ver resultados' : 'Definir reglas')
-        : 'Continuar (diccionario)';
-      return `<tr>
+    tbody.innerHTML = shown
+      .map((rev) => {
+        const meta = ESTADO_REVISION[rev.status] || ESTADO_REVISION.pendiente;
+        const next = rev.dictionary_filename
+          ? `rules.html?rev=${encodeURIComponent(rev.revision_id)}`
+          : `dictionary.html?rev=${encodeURIComponent(rev.revision_id)}`;
+        const label = rev.dictionary_filename
+          ? rev.rules_total
+            ? 'Ver resultados'
+            : 'Definir reglas'
+          : 'Continuar (diccionario)';
+        return `<tr>
           <td>${escapeHtml(rev.name)}</td>
           <td>${escapeHtml(rev.data_filename || '–')}</td>
           <td><span class="status-pill ${meta.cls}">${meta.label}</span></td>
@@ -172,7 +193,8 @@ function initHome() {
                data-delete="${escapeHtml(rev.revision_id)}">Eliminar</a>
           </td>
         </tr>`;
-    }).join('');
+      })
+      .join('');
 
     table.hidden = shown.length === 0;
     empty.hidden = shown.length > 0;
@@ -206,8 +228,11 @@ function initHome() {
     if (!link) return;
     e.preventDefault();
     const rev = revisions.find((r) => r.revision_id === link.dataset.delete);
-    if (!window.confirm(`Eliminar "${rev.name}" y sus ${rev.rules_total} regla(s)?`)) return;
-    await api('/dqc/revisions/' + encodeURIComponent(rev.revision_id), { method: 'DELETE' });
+    if (!window.confirm(`Eliminar "${rev.name}" y sus ${rev.rules_total} regla(s)?`))
+      return;
+    await api('/dqc/revisions/' + encodeURIComponent(rev.revision_id), {
+      method: 'DELETE',
+    });
     load();
   });
 
@@ -253,8 +278,11 @@ function initNewRevision() {
 
     if (!name) return show('El nombre de la revisión es obligatorio.', 'error');
     if (description.length < 100) {
-      return show('La descripción de la tabla es obligatoria y debe tener al ' +
-                  'menos 100 caracteres.', 'error');
+      return show(
+        'La descripción de la tabla es obligatoria y debe tener al ' +
+          'menos 100 caracteres.',
+        'error',
+      );
     }
     if (!file) return show('Debes subir el fichero de la BBDD.', 'error');
     if (!/\.(csv|xlsx)$/i.test(file.name)) {
@@ -270,8 +298,11 @@ function initNewRevision() {
     show('Leyendo la tabla…', '');
     try {
       const revision = await api('/dqc/revisions', { method: 'POST', body: payload });
-      show(`Revisión creada: ${revision.data_rows} filas y ` +
-           `${revision.data_columns} columnas. Pasando al diccionario…`, 'success');
+      show(
+        `Revisión creada: ${revision.data_rows} filas y ` +
+          `${revision.data_columns} columnas. Pasando al diccionario…`,
+        'success',
+      );
       window.location.href =
         'dictionary.html?rev=' + encodeURIComponent(revision.revision_id);
     } catch (err) {
@@ -300,9 +331,13 @@ function initDictionary() {
   // which revision this dictionary belongs to, in the box the design
   // already reserves for messages
   api('/dqc/revisions/' + encodeURIComponent(revisionId))
-    .then((rev) => show(
-      `Revisión "${rev.name}" · ${rev.data_filename} ` +
-      `(${rev.data_rows} filas, ${rev.data_columns} columnas).`, ''))
+    .then((rev) =>
+      show(
+        `Revisión "${rev.name}" · ${rev.data_filename} ` +
+          `(${rev.data_rows} filas, ${rev.data_columns} columnas).`,
+        '',
+      ),
+    )
     .catch((err) => show(err.message, 'error'));
 
   form.addEventListener('submit', async (event) => {
@@ -318,9 +353,12 @@ function initDictionary() {
     try {
       const rev = await api(
         '/dqc/revisions/' + encodeURIComponent(revisionId) + '/dictionary',
-        { method: 'POST', body: payload });
-      show(`Diccionario guardado: ${rev.dictionary_fields} campos reconocidos.`,
-           'success');
+        { method: 'POST', body: payload },
+      );
+      show(
+        `Diccionario guardado: ${rev.dictionary_fields} campos reconocidos.`,
+        'success',
+      );
       window.location.href = 'rules.html?rev=' + encodeURIComponent(revisionId);
     } catch (err) {
       show(err.message, 'error');
@@ -333,9 +371,9 @@ function initDictionary() {
 // ── step 3: rules and report ─────────────────────────────────────────────────
 
 const ESTADO_CONTROL = {
-  pending:   { label: 'Pendiente', cls: 'status-pending'   },
-  validated: { label: 'Validada',  cls: 'status-validated' },
-  rejected:  { label: 'Rechazada', cls: 'status-rejected'  },
+  pending: { label: 'Pendiente', cls: 'status-pending' },
+  validated: { label: 'Validada', cls: 'status-validated' },
+  rejected: { label: 'Rechazada', cls: 'status-rejected' },
 };
 
 const PASO_LABEL = {
@@ -386,7 +424,7 @@ function initRules() {
   const confirmReviewButton = fresh($('confirmReviewButton'));
   const reejecutarReviewButton = fresh($('reejecutarReviewButton'));
   const tabs = freshAll('.tab');
-  const timeline = document.querySelector('.timeline');   // emptied below
+  const timeline = document.querySelector('.timeline'); // emptied below
 
   // ── controls the design does not have: the review decision
   const badge = document.querySelector('.detail-title-row .badge');
@@ -406,7 +444,9 @@ function initRules() {
   actions.append(validateButton, rejectButton);
 
   // ── and the report, which the design only had as an alert()
-  document.body.insertAdjacentHTML('beforeend', `
+  document.body.insertAdjacentHTML(
+    'beforeend',
+    `
     <div id="wiringReportModal" class="modal-overlay">
       <div class="modal">
         <div class="modal-header">
@@ -421,7 +461,8 @@ function initRules() {
         </div>
         <div class="modal-body" id="wiringReportBody"></div>
       </div>
-    </div>`);
+    </div>`,
+  );
 
   const reportModal = $('wiringReportModal');
   $('wiringReportClose').addEventListener('click', () => {
@@ -447,26 +488,28 @@ function initRules() {
     revision = await api('/dqc/revisions/' + encodeURIComponent(revisionId));
     document.querySelector('.review-info h1').textContent =
       'Revisión: ' + revision.name;
-    document.querySelector('.review-info .subtitle').textContent =
-      revision.description;
+    document.querySelector('.review-info .subtitle').textContent = revision.description;
     renderChips();
     // keep the revision when navigating from the three-dot menu
     document.querySelectorAll('.header-menu a').forEach((link) => {
       const href = link.getAttribute('href') || '';
       if (href.startsWith('dictionary.html') || href.startsWith('rules.html')) {
-        link.setAttribute('href',
-          href.split('?')[0] + '?rev=' + encodeURIComponent(revisionId));
+        link.setAttribute(
+          'href',
+          href.split('?')[0] + '?rev=' + encodeURIComponent(revisionId),
+        );
       }
     });
   }
 
   function renderChips() {
-    const estado = {
-      pendiente: 'Pendiente de ejecución',
-      en_ejecucion: 'En ejecución',
-      completada: 'Reglas ejecutadas',
-      error: 'Con errores',
-    }[revision.status] || revision.status;
+    const estado =
+      {
+        pendiente: 'Pendiente de ejecución',
+        en_ejecucion: 'En ejecución',
+        completada: 'Reglas ejecutadas',
+        error: 'Con errores',
+      }[revision.status] || revision.status;
     document.querySelector('.review-info .chips').innerHTML = [
       `<div class="chip chip-primary">Estado global: ${escapeHtml(estado)}</div>`,
       `<div class="chip">Tabla: ${escapeHtml(revision.data_filename || '–')}</div>`,
@@ -479,21 +522,32 @@ function initRules() {
 
   // ── rules list
   async function loadRules(selectId) {
-    const data = await api('/dqc/revisions/' + encodeURIComponent(revisionId) + '/rules');
+    const data = await api(
+      '/dqc/revisions/' + encodeURIComponent(revisionId) + '/rules',
+    );
     rules = data.rules;
     renderRules();
     renderChips();
     const wanted = selectId || selectedId;
-    select(rules.some((r) => r.check_id === wanted) ? wanted
-          : (rules[0] ? rules[0].check_id : null));
+    select(
+      rules.some((r) => r.check_id === wanted)
+        ? wanted
+        : rules[0]
+          ? rules[0].check_id
+          : null,
+    );
   }
 
   function renderRules() {
-    rulesList.innerHTML = rules.map((rule) => {
-      const estado = ESTADO_CONTROL[rule.status] || ESTADO_CONTROL.pending;
-      const casos = rule.n_casos === null || rule.n_casos === undefined
-        ? '' : `<div class="small-text">${rule.n_casos} caso(s)</div>`;
-      return `<div class="rule-item${rule.check_id === selectedId ? ' active' : ''}"
+    rulesList.innerHTML =
+      rules
+        .map((rule) => {
+          const estado = ESTADO_CONTROL[rule.status] || ESTADO_CONTROL.pending;
+          const casos =
+            rule.n_casos === null || rule.n_casos === undefined
+              ? ''
+              : `<div class="small-text">${rule.n_casos} caso(s)</div>`;
+          return `<div class="rule-item${rule.check_id === selectedId ? ' active' : ''}"
                    data-id="${escapeHtml(rule.check_id)}">
           <div class="rule-left">
               <div class="rule-text">${escapeHtml(rule.description || rule.name)}</div>
@@ -504,7 +558,8 @@ function initRules() {
               <span class="rule-delete" data-action="delete">Eliminar</span>
           </div>
       </div>`;
-    }).join('') ||
+        })
+        .join('') ||
       '<div class="small-text">Todavía no hay reglas. Añade la primera arriba.</div>';
   }
 
@@ -517,7 +572,7 @@ function initRules() {
   // ── detail panel
   function renderDetail() {
     const rule = current();
-    const estado = rule ? (ESTADO_CONTROL[rule.status] || ESTADO_CONTROL.pending) : null;
+    const estado = rule ? ESTADO_CONTROL[rule.status] || ESTADO_CONTROL.pending : null;
     badge.textContent = estado ? estado.label : '–';
     validateButton.disabled = !rule || rule.status === 'validated';
     rejectButton.disabled = !rule || rule.status === 'rejected';
@@ -529,8 +584,9 @@ function initRules() {
       $('detailCondition').textContent = '–';
       casesBox.textContent = '–';
       $('detailExplanation').textContent = '–';
-      ['summaryCases', 'summaryPercent', 'summarySeverity']
-        .forEach((id) => { $(id).textContent = '–'; });
+      ['summaryCases', 'summaryPercent', 'summarySeverity'].forEach((id) => {
+        $(id).textContent = '–';
+      });
       $('commentsList').textContent = '';
       $('commentText').value = '';
       return;
@@ -539,13 +595,19 @@ function initRules() {
     $('detailRuleText').textContent = rule.description || rule.name;
 
     const campos = (rule.campos_entrada || []).join(', ') || '–';
-    const atribuidos = rule.atribucion && rule.atribucion.campos
-      ? rule.atribucion.campos.join(', ') : null;
-    const citas = rule.atribucion && rule.atribucion.citas && rule.atribucion.citas.length
-      ? rule.atribucion.citas.join(', ') : null;
+    const atribuidos =
+      rule.atribucion && rule.atribucion.campos
+        ? rule.atribucion.campos.join(', ')
+        : null;
+    const citas =
+      rule.atribucion && rule.atribucion.citas && rule.atribucion.citas.length
+        ? rule.atribucion.citas.join(', ')
+        : null;
     $('detailInterpretation').innerHTML =
       `<strong>Campos declarados:</strong> ${escapeHtml(campos)}<br/>` +
-      (atribuidos ? `<strong>Campos que la consulta lee:</strong> ${escapeHtml(atribuidos)}<br/>` : '') +
+      (atribuidos
+        ? `<strong>Campos que la consulta lee:</strong> ${escapeHtml(atribuidos)}<br/>`
+        : '') +
       (citas ? `<strong>Referencia:</strong> ${escapeHtml(citas)}<br/>` : '') +
       `<strong>Tipo de control:</strong> ${escapeHtml(rule.tipo || rule.category || '–')}`;
 
@@ -560,22 +622,28 @@ function initRules() {
     renderSummary(rule);
     $('commentText').value = '';
     $('commentsList').textContent = rule.feedback
-      ? 'Último comentario: ' + rule.feedback : 'Sin comentarios.';
+      ? 'Último comentario: ' + rule.feedback
+      : 'Sin comentarios.';
   }
 
   function renderCases(rule, box) {
     const cols = rule.columnas || [];
     const rows = rule.ejemplos || [];
     if (!cols.length || !rows.length) {
-      box.textContent = rule.n_casos === 0
-        ? 'La consulta se ejecutó y no encontró ningún caso que incumpla la regla.'
-        : 'Sin casos registrados para esta regla.';
+      box.textContent =
+        rule.n_casos === 0
+          ? 'La consulta se ejecutó y no encontró ningún caso que incumpla la regla.'
+          : 'Sin casos registrados para esta regla.';
       return;
     }
     box.innerHTML = `<table>
         <thead><tr>${cols.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
-        <tbody>${rows.map((row) =>
-          `<tr>${cols.map((c) => `<td>${escapeHtml(row[c])}</td>`).join('')}</tr>`).join('')}</tbody>
+        <tbody>${rows
+          .map(
+            (row) =>
+              `<tr>${cols.map((c) => `<td>${escapeHtml(row[c])}</td>`).join('')}</tr>`,
+          )
+          .join('')}</tbody>
       </table>
       <div class="detail-metrics" style="margin-top:6px;">
         Muestra de ${rows.length} de ${rule.n_casos} caso(s) detectado(s).
@@ -587,8 +655,9 @@ function initRules() {
     $('summaryCases').textContent =
       casos === null || casos === undefined ? '–' : `${casos} registro(s)`;
     $('summaryPercent').textContent =
-      (casos === null || casos === undefined || !revision.data_rows)
-        ? '–' : ((casos / revision.data_rows) * 100).toFixed(2).replace('.', ',') + ' %';
+      casos === null || casos === undefined || !revision.data_rows
+        ? '–'
+        : ((casos / revision.data_rows) * 100).toFixed(2).replace('.', ',') + ' %';
     $('summarySeverity').textContent = rule.severity || '–';
     $('detailExplanation').textContent =
       rule.explicacion || 'Sin explicación registrada.';
@@ -608,17 +677,24 @@ function initRules() {
       timeline.innerHTML =
         '<div class="small-text">Esta regla no tiene traza registrada.</div>';
     } else {
-      timeline.innerHTML = trace.map((step, i) => {
-        const title = PASO_LABEL[step.paso] || step.paso;
-        const desc = step.pregunta || step.accion ||
-          (step.estado ? 'Estado: ' + step.estado : '');
-        return `<div class="timeline-step" data-step="${i}">
+      timeline.innerHTML = trace
+        .map((step, i) => {
+          const title = PASO_LABEL[step.paso] || step.paso;
+          const desc =
+            step.pregunta ||
+            step.accion ||
+            (step.estado ? 'Estado: ' + step.estado : '');
+          return (
+            `<div class="timeline-step" data-step="${i}">
               <div class="step-icon ${stepClass(step)}">${i + 1}</div>
               <div class="step-title">${escapeHtml(title)}${
-                step.intento ? ' (intento ' + step.intento + ')' : ''}</div>
+                step.intento ? ' (intento ' + step.intento + ')' : ''
+              }</div>
               <div class="step-desc">${escapeHtml(desc)}</div>
-          </div>` + (i < trace.length - 1 ? '<div class="timeline-arrow">→</div>' : '');
-      }).join('');
+          </div>` + (i < trace.length - 1 ? '<div class="timeline-arrow">→</div>' : '')
+          );
+        })
+        .join('');
     }
     $('flujoDetailBox').textContent =
       'Pulsa en uno de los pasos del flujo para ver su detalle.';
@@ -628,7 +704,8 @@ function initRules() {
   timeline.addEventListener('click', (e) => {
     const node = e.target.closest('.timeline-step');
     if (!node) return;
-    timeline.querySelectorAll('.timeline-step')
+    timeline
+      .querySelectorAll('.timeline-step')
       .forEach((s) => s.classList.remove('active'));
     node.classList.add('active');
     const step = (current().trace || [])[Number(node.dataset.step)];
@@ -648,7 +725,8 @@ function initRules() {
       if (target === 'flujo') return renderFlow();
       tabs.forEach((t) => t.classList.remove('active'));
       tab.classList.add('active');
-      document.querySelectorAll('.tab-content-section')
+      document
+        .querySelectorAll('.tab-content-section')
         .forEach((s) => s.classList.remove('active'));
       $('tab-' + target).classList.add('active');
     });
@@ -662,9 +740,11 @@ function initRules() {
     confirmReviewButton.disabled = !ok;
 
     if (!ok) {
-      $('reviewInterpretation').textContent = data.estado === 'ambigua'
-        ? ('El asistente no tiene información suficiente: ' + (data.falta || 'sin detalle'))
-        : ('No se pudo derivar una consulta válida: ' + (data.error || 'sin detalle'));
+      $('reviewInterpretation').textContent =
+        data.estado === 'ambigua'
+          ? 'El asistente no tiene información suficiente: ' +
+            (data.falta || 'sin detalle')
+          : 'No se pudo derivar una consulta válida: ' + (data.error || 'sin detalle');
       $('reviewCode').textContent =
         'Añade contexto en el comentario y reejecuta la interpretación.';
       return;
@@ -692,8 +772,11 @@ function initRules() {
       leftMessage('Escribe una regla antes de iniciar la revisión.', true);
       return null;
     }
-    return apiJson('/dqc/revisions/' + encodeURIComponent(revisionId) + '/rules/preview',
-                   'POST', { regla, comentario: comentario || '' });
+    return apiJson(
+      '/dqc/revisions/' + encodeURIComponent(revisionId) + '/rules/preview',
+      'POST',
+      { regla, comentario: comentario || '' },
+    );
   }
 
   addRuleButton.addEventListener('click', async () => {
@@ -731,8 +814,10 @@ function initRules() {
     confirmReviewButton.disabled = true;
     try {
       const saved = await apiJson(
-        '/dqc/revisions/' + encodeURIComponent(revisionId) + '/rules', 'POST',
-        { preview_id: preview.preview_id, comentario: $('reviewComment').value.trim() });
+        '/dqc/revisions/' + encodeURIComponent(revisionId) + '/rules',
+        'POST',
+        { preview_id: preview.preview_id, comentario: $('reviewComment').value.trim() },
+      );
       $('ruleReviewModal').style.display = 'none';
       $('newRule').value = '';
       await loadRevision();
@@ -755,8 +840,12 @@ function initRules() {
 
   async function followJob(jobId) {
     for (;;) {
-      const job = await api('/dqc/revisions/' + encodeURIComponent(revisionId) +
-                            '/jobs/' + encodeURIComponent(jobId));
+      const job = await api(
+        '/dqc/revisions/' +
+          encodeURIComponent(revisionId) +
+          '/jobs/' +
+          encodeURIComponent(jobId),
+      );
       if (job.status === 'completado' || job.status === 'error') return job;
       const running = job.items.filter((i) => i.status === 'en_curso');
       const fase = running.length && running[0].fase ? ` (${running[0].fase})` : '';
@@ -776,7 +865,8 @@ function initRules() {
     try {
       const queued = await api(
         '/dqc/revisions/' + encodeURIComponent(revisionId) + '/rules/batch',
-        { method: 'POST', body: payload });
+        { method: 'POST', body: payload },
+      );
       const job = await followJob(queued.job_id);
       await loadRevision();
       await loadRules();
@@ -791,8 +881,11 @@ function initRules() {
   // ── review decisions
   async function setStatus(status) {
     try {
-      await apiJson('/dqc/checks/' + encodeURIComponent(selectedId) + '/status',
-                    'POST', { status });
+      await apiJson(
+        '/dqc/checks/' + encodeURIComponent(selectedId) + '/status',
+        'POST',
+        { status },
+      );
       await loadRules(selectedId);
     } catch (err) {
       leftMessage(err.message, true);
@@ -805,22 +898,32 @@ function initRules() {
   addCommentButton.addEventListener('click', async () => {
     const feedback = $('commentText').value.trim();
     if (!feedback || !selectedId) return;
-    await apiJson('/dqc/checks/' + encodeURIComponent(selectedId) + '/feedback',
-                  'POST', { feedback });
+    await apiJson(
+      '/dqc/checks/' + encodeURIComponent(selectedId) + '/feedback',
+      'POST',
+      { feedback },
+    );
     await loadRules(selectedId);
   });
 
   reejecutarButton.addEventListener('click', async () => {
     const motivo = $('reejecutarReason').value.trim();
     if (!selectedId) return;
-    if (!motivo) return leftMessage('Explica por qué quieres reejecutar la regla.', true);
+    if (!motivo)
+      return leftMessage('Explica por qué quieres reejecutar la regla.', true);
 
     reejecutarButton.disabled = true;
     leftMessage('Reejecutando el control…', false);
     try {
-      await apiJson('/dqc/revisions/' + encodeURIComponent(revisionId) +
-                    '/rules/' + encodeURIComponent(selectedId) + '/rerun',
-                    'POST', { motivo });
+      await apiJson(
+        '/dqc/revisions/' +
+          encodeURIComponent(revisionId) +
+          '/rules/' +
+          encodeURIComponent(selectedId) +
+          '/rerun',
+        'POST',
+        { motivo },
+      );
       $('reejecutarReason').value = '';
       await loadRules(selectedId);
       leftMessage('Control reejecutado con tu corrección.', false);
@@ -837,13 +940,19 @@ function initRules() {
     body.innerHTML = '<div class="detail-box-modal">Generando informe…</div>';
     reportModal.style.display = 'flex';
     try {
-      const report = await api('/dqc/revisions/' + encodeURIComponent(revisionId) + '/report');
+      const report = await api(
+        '/dqc/revisions/' + encodeURIComponent(revisionId) + '/report',
+      );
       const c = report.counts;
-      const rows = report.checks.map((check) => `<tr>
+      const rows = report.checks
+        .map(
+          (check) => `<tr>
           <td>${escapeHtml(check.description || check.name)}</td>
           <td>${escapeHtml(check.severity)}</td>
           <td>${check.n_casos === null || check.n_casos === undefined ? '–' : check.n_casos}</td>
-        </tr>`).join('');
+        </tr>`,
+        )
+        .join('');
       body.innerHTML = `
         <div class="detail-box-modal">
           <div class="detail-label-modal">Estado de la revisión</div>
@@ -857,17 +966,24 @@ function initRules() {
         </div>
         <div class="detail-box-modal">
           <div class="detail-label-modal">Controles validados</div>
-          ${rows ? `<table><thead><tr><th>Control</th><th>Severidad</th><th>Casos</th></tr></thead>
+          ${
+            rows
+              ? `<table><thead><tr><th>Control</th><th>Severidad</th><th>Casos</th></tr></thead>
                     <tbody>${rows}</tbody></table>`
-                 : '<div class="detail-metrics-modal">Ninguna regla validada todavía. Valida al menos una para incluirla en el informe.</div>'}
+              : '<div class="detail-metrics-modal">Ninguna regla validada todavía. Valida al menos una para incluirla en el informe.</div>'
+          }
         </div>
-        ${report.sql ? `<div class="detail-box-modal">
+        ${
+          report.sql
+            ? `<div class="detail-box-modal">
           <div class="detail-label-modal">Consulta centralizada</div>
           <pre class="wiring-sql">${escapeHtml(report.sql)}</pre>
           <div class="modal-actions">
             <button id="wiringDownloadSql">Descargar .sql</button>
           </div>
-        </div>` : ''}`;
+        </div>`
+            : ''
+        }`;
 
       if (report.sql) {
         $('wiringDownloadSql').addEventListener('click', () => {
@@ -890,8 +1006,11 @@ function initRules() {
     if (!item) return;
     if (e.target.matches('.rule-delete')) {
       const rule = rules.find((r) => r.check_id === item.dataset.id);
-      if (!window.confirm(`Eliminar la regla "${rule.description || rule.name}"?`)) return;
-      await api('/dqc/checks/' + encodeURIComponent(rule.check_id), { method: 'DELETE' });
+      if (!window.confirm(`Eliminar la regla "${rule.description || rule.name}"?`))
+        return;
+      await api('/dqc/checks/' + encodeURIComponent(rule.check_id), {
+        method: 'DELETE',
+      });
       if (selectedId === rule.check_id) selectedId = null;
       await loadRevision();
       await loadRules();
@@ -905,8 +1024,15 @@ function initRules() {
       await loadRevision();
       await loadRules();
       // a batch started before a reload is still running somewhere
-      const last = await api('/dqc/revisions/' + encodeURIComponent(revisionId) + '/jobs');
-      if (last && last.job_id && last.status !== 'completado' && last.status !== 'error') {
+      const last = await api(
+        '/dqc/revisions/' + encodeURIComponent(revisionId) + '/jobs',
+      );
+      if (
+        last &&
+        last.job_id &&
+        last.status !== 'completado' &&
+        last.status !== 'error'
+      ) {
         const job = await followJob(last.job_id);
         await loadRevision();
         await loadRules();
