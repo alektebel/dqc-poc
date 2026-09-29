@@ -1,7 +1,6 @@
 """Embedding client for semantic search.
 
-Multi-backend, mirroring ``src.knowledge.llm_client.LocalLLMClient``'s
-backend selection:
+Multi-backend:
 
 1. **Ollama** ``/api/embed`` endpoint — the original/default backend, e.g.
    ``nomic-embed-text`` (274 MB, runs on CPU).

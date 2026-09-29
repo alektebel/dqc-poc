@@ -1,1 +1,0 @@
-I'll read the key files to ground this assessment before planning.
